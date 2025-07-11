@@ -1,0 +1,47 @@
+# gRPC Client Configuration
+# This file configures the gRPC signing client
+
+# Server connection settings
+server_address = "127.0.0.1:50051"
+transport = "Tcp"
+
+# TLS configuration (optional)
+# [tls]
+# enabled = false
+# cert_path = "/path/to/client.crt"
+# key_path = "/path/to/client.key"
+# ca_cert_path = "/path/to/ca.crt"
+# require_client_cert = false
+# cipher_suites = ["TLS_AES_256_GCM_SHA384", "TLS_CHACHA20_POLY1305_SHA256"]
+# min_tls_version = "1.2"
+
+# Client cryptographic preferences
+[crypto]
+preferred_key_type = "EccP256"
+preferred_algorithm = "EcdsaP256Sha256"
+algorithm_preferences = [
+    "EcdsaP256Sha256",
+    "EcdsaP384Sha384", 
+    "RsaPssSha256"
+]
+
+# Connection pool configuration
+[connection_pool]
+max_size = 10
+min_size = 1
+idle_timeout = "5m"      # 5 minutes
+max_lifetime = "1h"      # 1 hour
+
+# Retry configuration
+[retry]
+enabled = true
+max_attempts = 3
+initial_delay = "100ms"
+max_delay = "5s"
+backoff_multiplier = 2.0
+
+# Example environment variable overrides:
+# GRPC_CLIENT_SERVER_ADDRESS=192.168.1.100:50051
+# GRPC_CLIENT_TRANSPORT=Tcp
+# GRPC_CLIENT_CRYPTO_PREFERRED_KEY_TYPE=EccP384
+# GRPC_CLIENT_RETRY_MAX_ATTEMPTS=5
