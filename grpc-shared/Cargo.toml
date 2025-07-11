@@ -1,0 +1,51 @@
+[package]
+name = "grpc-shared"
+version = "0.1.0"
+edition = "2021"
+description = "Shared library for high-performance gRPC client/server with cryptographic operations"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+# Core async runtime and gRPC
+tokio = { workspace = true }
+tonic = { workspace = true }
+prost = { workspace = true }
+
+# Cryptography
+ring = { workspace = true, optional = true }
+
+# Async traits
+async-trait = "0.1"
+
+# Logging
+log = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Serialization and configuration
+serde = { workspace = true }
+serde_json = { workspace = true }
+config = { workspace = true }
+
+# Optional benchmarking dependencies
+criterion = { workspace = true, optional = true }
+
+# Platform-specific dependencies
+[target.'cfg(unix)'.dependencies]
+tokio-vsock = { workspace = true, optional = true }
+
+[build-dependencies]
+tonic-build = { workspace = true }
+
+[dev-dependencies]
+tokio-test = { workspace = true }
+proptest = { workspace = true }
+
+[features]
+default = ["tcp", "crypto"]
+tcp = []
+vsock = ["tokio-vsock"]
+crypto = ["ring"]
+benchmarks = ["criterion"]

@@ -1,0 +1,55 @@
+[workspace]
+members = [
+    "grpc-shared",
+    "grpc-server", 
+    "grpc-client"
+]
+resolver = "2"
+
+[workspace.dependencies]
+# Core async runtime and gRPC
+tokio = { version = "1.0", features = ["full"] }
+tonic = "0.8"
+prost = "0.11"
+tonic-build = "0.8"
+
+# Cryptography
+ring = "0.16"
+
+# Logging
+log = "0.4"
+env_logger = "0.10"
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Serialization and configuration
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+config = "0.13"
+
+# CLI parsing
+clap = { version = "4.0", features = ["derive"] }
+
+# Platform-specific dependencies
+tokio-vsock = "0.3"
+
+# Development and benchmarking
+tokio-test = "0.4"
+criterion = "0.4"
+proptest = "1.0"
+
+[workspace.dev-dependencies]
+
+# Workspace-level profile optimizations for performance
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[profile.bench]
+opt-level = 3
+lto = true
+codegen-units = 1

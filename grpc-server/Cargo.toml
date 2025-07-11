@@ -1,0 +1,31 @@
+[package]
+name = "grpc-server"
+version = "0.1.0"
+edition = "2021"
+description = "High-performance gRPC server with cryptographic operations"
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "grpc-server"
+path = "src/main.rs"
+
+[dependencies]
+# Shared library
+grpc-shared = { path = "../grpc-shared" }
+
+# Core async runtime
+tokio = { workspace = true }
+
+# Logging
+log = { workspace = true }
+env_logger = { workspace = true }
+
+# CLI parsing
+clap = { workspace = true }
+
+# Configuration
+config = { workspace = true }
+serde = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
