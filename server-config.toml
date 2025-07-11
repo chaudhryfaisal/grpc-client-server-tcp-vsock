@@ -1,0 +1,32 @@
+# Sample server configuration for gRPC signing server
+
+bind_address = "127.0.0.1"
+port = 50051
+transport = "Tcp"
+
+[crypto]
+default_key_type = "EccP256"
+supported_algorithms = ["EcdsaP256Sha256", "RsaPssSha256"]
+
+[crypto.key_generation]
+generate_at_startup = true
+key_types = ["EccP256"]
+
+[crypto.key_loading]
+key_files = []
+
+[logging]
+level = "info"
+structured = true
+log_requests = false
+log_performance = true
+
+[performance]
+max_connections = 1000
+connection_timeout = "10s"
+request_timeout = "30s"
+
+[performance.keep_alive]
+enabled = true
+interval = "60s"
+timeout = "5s"

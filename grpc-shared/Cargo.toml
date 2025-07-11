@@ -29,6 +29,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 config = { workspace = true }
 
+# UUID generation
+uuid = { workspace = true }
+
 # Optional benchmarking dependencies
 criterion = { workspace = true, optional = true }
 

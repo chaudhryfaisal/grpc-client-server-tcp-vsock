@@ -55,20 +55,27 @@ async fn main() -> anyhow::Result<()> {
 
     log::info!("Server configuration: {:?}", config);
 
-    // Create and start the server
-    let server = GrpcSigningServer::new(config);
+    // Create the server
+    let mut server = GrpcSigningServer::new(config).await?;
+    
+    // Create shutdown channel
+    let (shutdown_tx, shutdown_rx) = GrpcSigningServer::create_shutdown_channel();
     
     // Handle shutdown gracefully
     tokio::select! {
-        result = server.start() => {
+        result = server.start_with_shutdown(shutdown_rx) => {
             if let Err(e) = result {
                 log::error!("Server error: {}", e);
                 return Err(e.into());
             }
         }
         _ = tokio::signal::ctrl_c() => {
-            log::info!("Received shutdown signal");
-            server.stop().await?;
+            log::info!("Received Ctrl+C, initiating graceful shutdown");
+            if let Err(_) = shutdown_tx.send(()) {
+                log::error!("Failed to send shutdown signal");
+            }
+            // Give the server a moment to shut down gracefully
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         }
     }
 
@@ -78,8 +85,19 @@ async fn main() -> anyhow::Result<()> {
 
 /// Load server configuration from file
 fn load_config(config_path: &PathBuf) -> anyhow::Result<ServerConfig> {
-    // TODO: Implement configuration loading from file
-    // For now, return default configuration
     log::info!("Loading configuration from: {:?}", config_path);
-    Ok(ServerConfig::default())
+    
+    if !config_path.exists() {
+        log::warn!("Configuration file does not exist: {:?}", config_path);
+        return Ok(ServerConfig::default());
+    }
+
+    let config_content = std::fs::read_to_string(config_path)
+        .map_err(|e| anyhow::anyhow!("Failed to read config file: {}", e))?;
+
+    let config: ServerConfig = toml::from_str(&config_content)
+        .map_err(|e| anyhow::anyhow!("Failed to parse config file: {}", e))?;
+
+    log::info!("Configuration loaded successfully");
+    Ok(config)
 }

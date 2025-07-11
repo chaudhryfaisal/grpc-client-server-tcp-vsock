@@ -146,7 +146,7 @@ pub enum KeyType {
 }
 
 /// Signing algorithm enumeration
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum SigningAlgorithm {
     /// RSA PSS with SHA-256
     RsaPssSha256,

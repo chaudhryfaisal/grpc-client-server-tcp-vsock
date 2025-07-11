@@ -5,8 +5,11 @@
 
 use crate::config::{KeyType, KeyGenerationConfig, KeyLoadingConfig};
 use crate::error::{CryptoError, Result};
+use ring::{rand, signature};
+use ring::signature::KeyPair as RingKeyPair;
 use std::collections::HashMap;
 use std::path::Path;
+use std::fs;
 
 /// Key pair abstraction for different key types
 #[derive(Debug, Clone)]
@@ -15,9 +18,9 @@ pub struct KeyPair {
     pub key_id: String,
     /// Key type
     pub key_type: KeyType,
-    /// Private key bytes
+    /// Private key bytes (PKCS#8 DER format)
     pub private_key: Vec<u8>,
-    /// Public key bytes
+    /// Public key bytes (DER format)
     pub public_key: Vec<u8>,
 }
 
@@ -30,6 +33,8 @@ pub struct KeyManager {
     generation_config: KeyGenerationConfig,
     /// Key loading configuration
     loading_config: KeyLoadingConfig,
+    /// System random number generator
+    rng: rand::SystemRandom,
 }
 
 impl KeyManager {
@@ -42,6 +47,7 @@ impl KeyManager {
             keys: HashMap::new(),
             generation_config,
             loading_config,
+            rng: rand::SystemRandom::new(),
         }
     }
 
@@ -60,46 +66,89 @@ impl KeyManager {
 
     /// Generate RSA key pair using ring crate
     pub async fn generate_rsa_key(&self, key_type: KeyType) -> Result<KeyPair> {
-        // TODO: Implement RSA key generation using ring
-        // This is a placeholder implementation
-        match key_type {
-            KeyType::Rsa2048 | KeyType::Rsa3072 | KeyType::Rsa4096 => {
-                // Placeholder for RSA key generation
-                let key_id = format!("rsa_{:?}", key_type);
-                Ok(KeyPair {
-                    key_id,
-                    key_type,
-                    private_key: vec![0; 256], // Placeholder
-                    public_key: vec![0; 256],  // Placeholder
-                })
-            }
-            _ => Err(CryptoError::UnsupportedAlgorithm {
+        // For now, we'll create placeholder RSA keys since ring doesn't support RSA key generation
+        // In a production environment, you'd use a different crate like `rsa` for key generation
+        // and then convert to the format needed by ring for signing
+        
+        let key_size = match key_type {
+            KeyType::Rsa2048 => 2048,
+            KeyType::Rsa3072 => 3072,
+            KeyType::Rsa4096 => 4096,
+            _ => return Err(CryptoError::UnsupportedAlgorithm {
                 algorithm: format!("{:?}", key_type),
-            }
-            .into()),
-        }
+            }.into()),
+        };
+
+        // Create a placeholder key pair - in production, use proper RSA key generation
+        let key_id = format!("rsa_{}", key_size);
+        
+        // For demonstration, we'll create a minimal valid PKCS#8 structure
+        // In production, use a proper RSA key generation library
+        let private_key = self.generate_placeholder_rsa_key(key_size)?;
+        let public_key = self.extract_rsa_public_key(&private_key)?;
+
+        Ok(KeyPair {
+            key_id,
+            key_type,
+            private_key,
+            public_key,
+        })
     }
 
     /// Generate ECC key pair using ring crate
     pub async fn generate_ecc_key(&self, key_type: KeyType) -> Result<KeyPair> {
-        // TODO: Implement ECC key generation using ring
+        let algorithm = match key_type {
+            KeyType::EccP256 => &signature::ECDSA_P256_SHA256_FIXED_SIGNING,
+            KeyType::EccP384 => &signature::ECDSA_P384_SHA384_FIXED_SIGNING,
+            _ => return Err(CryptoError::UnsupportedAlgorithm {
+                algorithm: format!("{:?} - P-521 not supported by ring", key_type),
+            }.into()),
+        };
+
+        // Generate ECC key pair
+        let key_pair_doc = signature::EcdsaKeyPair::generate_pkcs8(algorithm, &self.rng)
+            .map_err(|_| CryptoError::KeyGeneration {
+                reason: format!("Failed to generate ECC {:?} key", key_type),
+            })?;
+
+        let private_key = key_pair_doc.as_ref().to_vec();
+        
+        // Extract public key from the key pair
+        let ecc_key_pair = signature::EcdsaKeyPair::from_pkcs8(algorithm, &private_key)
+            .map_err(|_| CryptoError::KeyGeneration {
+                reason: "Failed to parse generated ECC key".to_string(),
+            })?;
+
+        let public_key = ecc_key_pair.public_key().as_ref().to_vec();
+
+        let key_id = format!("ecc_{:?}", key_type);
+        Ok(KeyPair {
+            key_id,
+            key_type,
+            private_key,
+            public_key,
+        })
+    }
+
+    /// Generate placeholder RSA key (for demonstration)
+    fn generate_placeholder_rsa_key(&self, _key_size: u32) -> Result<Vec<u8>> {
         // This is a placeholder implementation
-        match key_type {
-            KeyType::EccP256 | KeyType::EccP384 | KeyType::EccP521 => {
-                // Placeholder for ECC key generation
-                let key_id = format!("ecc_{:?}", key_type);
-                Ok(KeyPair {
-                    key_id,
-                    key_type,
-                    private_key: vec![0; 64], // Placeholder
-                    public_key: vec![0; 64],  // Placeholder
-                })
-            }
-            _ => Err(CryptoError::UnsupportedAlgorithm {
-                algorithm: format!("{:?}", key_type),
-            }
-            .into()),
-        }
+        // In production, use a proper RSA key generation library like the `rsa` crate
+        // and convert to PKCS#8 format
+        
+        // Return a minimal placeholder that won't work for actual signing
+        // but allows the system to compile and run
+        Ok(vec![
+            0x30, 0x82, 0x01, 0x00, // SEQUENCE, length
+            0x02, 0x01, 0x00,       // INTEGER 0 (version)
+            // ... rest would be actual RSA key components
+        ])
+    }
+
+    /// Extract RSA public key from private key (placeholder)
+    fn extract_rsa_public_key(&self, _private_key: &[u8]) -> Result<Vec<u8>> {
+        // Placeholder implementation
+        Ok(vec![0x30, 0x82, 0x01, 0x22]) // Minimal DER structure
     }
 
     /// Load key from file path
@@ -110,17 +159,70 @@ impl KeyManager {
         private_key_path: P,
         public_key_path: Option<P>,
     ) -> Result<KeyPair> {
-        // TODO: Implement key loading from files
-        // This is a placeholder implementation
-        let _private_path = private_key_path.as_ref();
-        let _public_path = public_key_path.as_ref().map(|p| p.as_ref());
+        let private_path = private_key_path.as_ref();
+        
+        // Read private key file
+        let private_key = fs::read(private_path)
+            .map_err(|e| CryptoError::KeyLoading {
+                path: private_path.display().to_string(),
+                reason: format!("Failed to read private key file: {}", e),
+            })?;
+
+        // Read public key file if provided, otherwise derive from private key
+        let public_key = if let Some(public_path) = public_key_path {
+            let public_path = public_path.as_ref();
+            fs::read(public_path)
+                .map_err(|e| CryptoError::KeyLoading {
+                    path: public_path.display().to_string(),
+                    reason: format!("Failed to read public key file: {}", e),
+                })?
+        } else {
+            // Derive public key from private key
+            self.derive_public_key(&private_key, &key_type)?
+        };
 
         Ok(KeyPair {
             key_id,
             key_type,
-            private_key: vec![0; 256], // Placeholder
-            public_key: vec![0; 256],  // Placeholder
+            private_key,
+            public_key,
         })
+    }
+
+    /// Derive public key from private key
+    fn derive_public_key(&self, private_key: &[u8], key_type: &KeyType) -> Result<Vec<u8>> {
+        match key_type {
+            KeyType::Rsa2048 | KeyType::Rsa3072 | KeyType::Rsa4096 => {
+                // For RSA keys loaded from files, we'd need to parse the PKCS#8 structure
+                // and extract the public key components. This is a placeholder.
+                Ok(vec![0x30, 0x82, 0x01, 0x22]) // Placeholder DER structure
+            }
+            KeyType::EccP256 => {
+                let ecc_key_pair = signature::EcdsaKeyPair::from_pkcs8(
+                    &signature::ECDSA_P256_SHA256_FIXED_SIGNING,
+                    private_key,
+                )
+                .map_err(|_| CryptoError::InvalidKeyFormat {
+                    reason: "Invalid ECC P-256 private key format".to_string(),
+                })?;
+                Ok(ecc_key_pair.public_key().as_ref().to_vec())
+            }
+            KeyType::EccP384 => {
+                let ecc_key_pair = signature::EcdsaKeyPair::from_pkcs8(
+                    &signature::ECDSA_P384_SHA384_FIXED_SIGNING,
+                    private_key,
+                )
+                .map_err(|_| CryptoError::InvalidKeyFormat {
+                    reason: "Invalid ECC P-384 private key format".to_string(),
+                })?;
+                Ok(ecc_key_pair.public_key().as_ref().to_vec())
+            }
+            KeyType::EccP521 => {
+                Err(CryptoError::UnsupportedAlgorithm {
+                    algorithm: "ECC P-521 not supported by ring".to_string(),
+                }.into())
+            }
+        }
     }
 
     /// Get key pair by key ID
@@ -149,10 +251,15 @@ impl KeyManager {
         for key_type in &key_types {
             let key_pair = match key_type {
                 KeyType::Rsa2048 | KeyType::Rsa3072 | KeyType::Rsa4096 => {
+                    log::warn!("RSA key generation using placeholder implementation");
                     self.generate_rsa_key(key_type.clone()).await?
                 }
-                KeyType::EccP256 | KeyType::EccP384 | KeyType::EccP521 => {
+                KeyType::EccP256 | KeyType::EccP384 => {
                     self.generate_ecc_key(key_type.clone()).await?
+                }
+                KeyType::EccP521 => {
+                    log::warn!("ECC P-521 not supported by ring crate, skipping");
+                    continue;
                 }
             };
 
@@ -224,5 +331,34 @@ impl KeyPair {
             self.key_type,
             KeyType::EccP256 | KeyType::EccP384 | KeyType::EccP521
         )
+    }
+
+    /// Get ring RSA key pair for signing operations (placeholder)
+    pub fn as_rsa_key_pair(&self) -> Result<signature::RsaKeyPair> {
+        if !self.is_rsa() {
+            return Err(CryptoError::InvalidKeyFormat {
+                reason: "Key is not an RSA key".to_string(),
+            }.into());
+        }
+
+        // For now, return an error since we're using placeholder RSA keys
+        // In production, this would parse the actual PKCS#8 RSA key
+        Err(CryptoError::InvalidKeyFormat {
+            reason: "RSA key parsing not implemented with placeholder keys".to_string(),
+        }.into())
+    }
+
+    /// Get ring ECC key pair for signing operations
+    pub fn as_ecc_key_pair(&self, algorithm: &'static signature::EcdsaSigningAlgorithm) -> Result<signature::EcdsaKeyPair> {
+        if !self.is_ecc() {
+            return Err(CryptoError::InvalidKeyFormat {
+                reason: "Key is not an ECC key".to_string(),
+            }.into());
+        }
+
+        signature::EcdsaKeyPair::from_pkcs8(algorithm, &self.private_key)
+            .map_err(|_| CryptoError::InvalidKeyFormat {
+                reason: "Invalid ECC key format".to_string(),
+            }.into())
     }
 }
