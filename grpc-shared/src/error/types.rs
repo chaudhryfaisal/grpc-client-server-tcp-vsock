@@ -31,6 +31,10 @@ pub enum Error {
     #[error("Transport error: {0}")]
     Transport(#[from] TransportError),
 
+    /// Validation errors
+    #[error("Validation error: {0}")]
+    Validation(ValidationError),
+
     /// gRPC-specific errors
     #[error("gRPC error: {0}")]
     Grpc(#[from] tonic::Status),
@@ -170,6 +174,14 @@ pub enum TransportError {
     /// Transport configuration error
     #[error("Transport configuration error: {message}")]
     Configuration { message: String },
+}
+
+/// Validation errors
+#[derive(Error, Debug)]
+pub enum ValidationError {
+    /// Invalid input for field
+    #[error("Invalid input for field '{field}': {message}")]
+    InvalidInput { field: String, message: String },
 }
 
 /// Result type alias for the gRPC system

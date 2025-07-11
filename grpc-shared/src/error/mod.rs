@@ -10,5 +10,5 @@ pub use types::{Error, Result};
 
 // Re-export common error types for convenience
 pub use types::{
-    ConfigError, CryptoError, NetworkError, ResourceError, TransportError,
+    ConfigError, CryptoError, NetworkError, ResourceError, TransportError, ValidationError,
 };

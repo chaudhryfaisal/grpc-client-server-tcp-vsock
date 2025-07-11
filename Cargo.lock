@@ -707,7 +707,10 @@ dependencies = [
  "grpc-shared",
  "log",
  "serde",
+ "thiserror 1.0.69",
  "tokio",
+ "tonic",
+ "uuid",
 ]
 
 [[package]]

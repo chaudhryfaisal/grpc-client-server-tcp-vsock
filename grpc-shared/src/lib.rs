@@ -6,7 +6,8 @@
 
 #![deny(unsafe_code)]
 #![warn(clippy::all)]
-#![warn(missing_docs)]
+#![allow(missing_docs)]
+#![allow(unused_imports)] // TODO 
 
 // Core modules
 pub mod config;

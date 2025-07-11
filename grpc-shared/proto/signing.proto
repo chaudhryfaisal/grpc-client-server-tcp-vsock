@@ -83,9 +83,9 @@ message KeyInfo {
 // The request message containing the data to be signed
 message SignRequest {
   bytes data = 1;
-  string key_id = 2;
+  KeyType key_type = 2;
   SigningAlgorithm algorithm = 3;
-  HashAlgorithm hash_algorithm = 4;
+  string key_id = 4;
 }
 
 // The response message containing the signature

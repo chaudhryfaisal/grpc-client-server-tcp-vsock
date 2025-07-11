@@ -4,8 +4,14 @@
 //! Supports both TCP and VSOCK transports
 
 use clap::Parser;
-use grpc_shared::{config::ClientConfig, client::GrpcSigningClient};
+use grpc_shared::config::ClientConfig;
 use std::path::PathBuf;
+
+mod client;
+mod config;
+mod error;
+
+use client::GrpcSigningClient;
 
 /// Command line arguments for the gRPC client
 #[derive(Parser, Debug)]
@@ -57,14 +63,14 @@ async fn main() -> anyhow::Result<()> {
     log::info!("Client configuration: {:?}", config);
 
     // Create the client
-    let client = GrpcSigningClient::new(config);
+    let mut client = GrpcSigningClient::new(config);
 
     if args.benchmark {
         log::info!("Running in benchmark mode");
-        run_benchmark(&client).await?;
+        run_benchmark(&mut client).await?;
     } else {
         log::info!("Running single signing request");
-        run_single_request(&client, &args.data).await?;
+        run_single_request(&mut client, &args.data).await?;
     }
 
     log::info!("Client operation complete");
@@ -80,7 +86,7 @@ fn load_config(config_path: &PathBuf) -> anyhow::Result<ClientConfig> {
 }
 
 /// Run a single signing request
-async fn run_single_request(client: &GrpcSigningClient, data: &str) -> anyhow::Result<()> {
+async fn run_single_request(client: &mut GrpcSigningClient, data: &str) -> anyhow::Result<()> {
     log::info!("Connecting to server");
     client.connect().await?;
 
@@ -94,7 +100,7 @@ async fn run_single_request(client: &GrpcSigningClient, data: &str) -> anyhow::R
 }
 
 /// Run benchmark tests
-async fn run_benchmark(client: &GrpcSigningClient) -> anyhow::Result<()> {
+async fn run_benchmark(client: &mut GrpcSigningClient) -> anyhow::Result<()> {
     log::info!("Starting benchmark tests");
     client.connect().await?;
 
