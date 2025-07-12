@@ -44,8 +44,6 @@ tokio-test = "0.4"
 criterion = "0.4"
 proptest = "1.0"
 
-[workspace.dev-dependencies]
-
 # Workspace-level profile optimizations for performance
 [profile.release]
 opt-level = 3

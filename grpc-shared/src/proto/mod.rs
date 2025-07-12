@@ -36,7 +36,7 @@ pub use signing::health_check_response::ServingStatus;
 pub type SigningClient = SigningServiceClient<tonic::transport::Channel>;
 
 #[cfg(feature = "server")]
-pub type SigningServer = SigningServiceServer<crate::server::SigningServiceImpl>;
+pub type SigningServer = SigningServiceServer<crate::server::GrpcSigningServer>;
 
 // Include tests
 #[cfg(test)]

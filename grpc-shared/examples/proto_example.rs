@@ -41,7 +41,7 @@ fn main() {
         data: b"Hello, World!".to_vec(),
         key_id: "example-key-id".to_string(),
         algorithm: SigningAlgorithm::RsaPssSha256 as i32,
-        hash_algorithm: HashAlgorithm::Sha256 as i32,
+        key_type: KeyType::Rsa2048 as i32,
     };
     println!("   Sign Request: {:?}", sign_request);
 

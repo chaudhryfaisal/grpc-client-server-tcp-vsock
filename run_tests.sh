@@ -1,4 +1,4 @@
-!/bin/bash
+#!/bin/bash
 
 echo "=== Running gRPC Client-Server Test Suite ==="
 echo "Phase 3: Testing & Validation Implementation"

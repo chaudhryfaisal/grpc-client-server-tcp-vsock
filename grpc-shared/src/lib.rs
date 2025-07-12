@@ -30,7 +30,7 @@ pub use error::{Error, Result};
 pub use transport::{Transport, TransportType};
 
 // Re-export crypto types
-pub use crypto::{KeyType, SigningAlgorithm};
+pub use config::{KeyType, SigningAlgorithm};
 
 // Re-export generated protobuf types
 pub use proto::signing::{

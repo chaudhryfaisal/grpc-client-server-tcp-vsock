@@ -62,13 +62,13 @@ mod tests {
             data: b"test data".to_vec(),
             key_id: "test-key".to_string(),
             algorithm: SigningAlgorithm::RsaPssSha256 as i32,
-            hash_algorithm: HashAlgorithm::Sha256 as i32,
+            key_type: KeyType::Rsa2048 as i32,
         };
 
         assert_eq!(request.data, b"test data");
         assert_eq!(request.key_id, "test-key");
         assert_eq!(request.algorithm, SigningAlgorithm::RsaPssSha256 as i32);
-        assert_eq!(request.hash_algorithm, HashAlgorithm::Sha256 as i32);
+        assert_eq!(request.key_type, KeyType::Rsa2048 as i32);
     }
 
     #[test]

@@ -47,8 +47,9 @@ tokio-test = { workspace = true }
 proptest = { workspace = true }
 
 [features]
-default = ["tcp", "crypto"]
+default = ["tcp", "crypto", "server"]
 tcp = []
 vsock = ["tokio-vsock"]
 crypto = ["ring"]
+server = []
 benchmarks = ["criterion"]
