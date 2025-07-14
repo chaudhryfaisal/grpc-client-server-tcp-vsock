@@ -1,0 +1,29 @@
+[package]
+name = "grpc-performance-rs"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "server"
+path = "src/bin/server.rs"
+
+[[bin]]
+name = "client"
+path = "src/bin/client.rs"
+
+[dependencies]
+tonic = "0.11"
+prost = "0.12"
+tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
+log = "0.4"
+env_logger = "0.10"
+thiserror = "1.0"
+http = "0.2"
+ring = "0.17"
+rand = "0.8"
+
+[build-dependencies]
+tonic-build = "0.11"
+
+[dev-dependencies]
+tokio-test = "0.4"

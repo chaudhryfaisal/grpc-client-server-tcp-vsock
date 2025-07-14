@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package echo;
+
+// Echo service for high-performance request/response testing
+service EchoService {
+    // Echo back the request payload with timestamps
+    rpc Echo(EchoRequest) returns (EchoResponse);
+}
+
+// Request message for echo service
+message EchoRequest {
+    // Payload to echo back
+    string payload = 1;
+    // Client timestamp when request was sent
+    int64 timestamp = 2;
+}
+
+// Response message from echo service
+message EchoResponse {
+    // Echoed payload from request
+    string payload = 1;
+    // Original request timestamp
+    int64 request_timestamp = 2;
+    // Server timestamp when response was generated
+    int64 response_timestamp = 3;
+}
