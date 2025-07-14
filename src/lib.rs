@@ -12,6 +12,9 @@ pub mod crypto {
     tonic::include_proto!("crypto");
 }
 
+// Transport abstraction layer
+pub mod transport;
+
 /// Get current timestamp in milliseconds since Unix epoch
 pub fn current_timestamp_millis() -> i64 {
     SystemTime::now()

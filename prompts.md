@@ -4,6 +4,8 @@ create complete PRD for ai coding agent, split implementation into small tasks, 
 generate prd for maximize performance and minimal latency grpc client and server in rust which supports both TCP and VSOCK
 - maximize performance over single or multiple grpc connections, for single or multiple threads
 - grpc should have two services, echo service which will log and echo back payload and crypto service to sign RSA and ECC using rust ring create over grpc
++ first implement echo service on server and client side , test it end to end then move to crypto service
++ for crypto service, implement end to end service with mock , test it full working before actually implementing with ring crate
 - client should choose which key type and algorithm to use, only support one algorithm per key type
 - Server must generate both keys at startup
 - use logging crate and have detailed logging at configurable logging level
@@ -11,16 +13,23 @@ generate prd for maximize performance and minimal latency grpc client and server
 - generate single function test to test end to end functionality to launch the server, then client to connect and perform echo, and crypto ecc and rsa sign operations.
 - add benchmark bin which should have configurable connections and threads to measure performance over single threads or multiple thread, at configureable request per second
 - generate all code in single crate with client, server and benchmark binaries
-- do not need cicd or documentation in initial phase
 - generate minimal makefile to build, test, run client, run server, and benchmark
 - start from skeleton of the project and build up the functionality
 - prioritize on end to end working client and server flow before writing test cases and benchmark client
+- keep rust crate dependency to minimal and dependency features to be minimal to optimize compilation time
++ when launching server from command line, always launch as background process since it will be blocking terminal for ever, also before launching try to close previous instance to avoid port conflicts
+- do not need cicd or documentation in initial phase
+- do not need to create any examples on how to use any of he code
 - do not use placeholder or mock implementations , once task is completed, it should be fully functional, if you must come back to an implementation then add proper TODO with detailed comments to it can be properly implemented later
 - do not implement any additional functionality not explicitly requested in the requirements
-- keep rust crate dependency to minimal and dependency features to be minimal to optimize compilation time
+
 
 # Kilo Code Orchestrator Prompt 
-continue to implement prd from @/prd.md , generate tasks list and save them in tasks.md and check off tasks as they are completed, if tasks.md already exist then resume work to complete remaining tasks.md
+1. continue to implement prd from @/prd.md , generate tasks list and save them in tasks.md and check off tasks as they are completed, if tasks.md already exist then resume work to complete remaining tasks.md
+
+2. continue to implement remaining tasks from @/tasks.md and check off tasks as they are completed, prioritize vsock related tasks
+
+3. continue to implement remaining tasks from @/tasks.md and check off tasks as they are completed, when launching server from command line, always launch as background process since it will be blocking terminal for ever, also before launching try to close previous instance to avoid port conflicts
 
 # Kilo Code Memory Bank Setup
 ```bash
