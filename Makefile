@@ -12,6 +12,14 @@ all: build
 setup:
 	apt-get update && apt-get install -y protobuf-compiler
 
+# Build all binaries in release mode
+build:
+	@echo "Building all binaries in release mode..."
+	@cargo build --release --bins
+
+# Run integration tests
+test:
+	@echo "Running integration tests..."
 	@cargo test --release
 
 # Start the gRPC server

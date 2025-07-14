@@ -1,246 +1,227 @@
-# Product Requirements Document: High-Performance gRPC Client/Server in Rust
+# Product Requirements Document (PRD): High-Performance gRPC Client/Server System
 
-## Project Overview
+## Overview
 
-**Project Name:** grpc-performance-rs  
-**Objective:** Build a minimal latency, maximum performance gRPC client and server in Rust supporting both TCP and VSOCK transports with cryptographic services.
+Develop a high-performance, minimal latency gRPC client and server implementation in Rust supporting both TCP and VSOCK transports with cryptographic services.
 
-### Core Value Proposition
-Create a production-ready gRPC implementation that maximizes performance across single and multiple connections while providing secure cryptographic operations using RSA and ECC signing capabilities[1][2].
+## Objectives
 
-## Requirements Specification
+- **Primary Goal**: Maximize performance and minimize latency for gRPC operations[1][2]
+- **Secondary Goal**: Provide reliable cryptographic services via gRPC
+- **Success Metrics**: Support high request rates with minimal CPU usage and sub-millisecond latencies
 
-### Functional Requirements
+## Core Features
 
-#### Transport Support
-- **TCP Transport:** Standard TCP/IP connectivity for network communication
-- **VSOCK Transport:** Virtio socket support for VM-to-host communication[3][4]
-- **Dual Protocol:** Seamless switching between transport types
+### Transport Support
+- **TCP**: Standard network transport for remote connections
+- **VSOCK**: Optimized for VM-to-host communication
+- Connection pooling for performance optimization[3]
 
-#### Service Definitions
-1. **Echo Service**
-   - Log incoming payload with configurable detail level
-   - Return identical payload to caller
-   - Support for various payload sizes
-
-2. **Crypto Service**
-   - RSA signature generation using Ring crate[5]
-   - ECC signature generation using Ring crate
-   - Client-specified algorithm selection
-   - One algorithm per key type limitation
-
-#### Performance Requirements
-- **Latency:** Sub-millisecond response times for local connections
-- **Throughput:** Support 100K+ requests/second based on Tonic benchmarks[1]
-- **Concurrency:** Efficient handling across multiple threads and connections[6]
-- **Scalability:** Linear performance scaling with additional threads
-
-### Non-Functional Requirements
-
-#### Reliability
-- **Error Handling:** No panics or unwrap() calls in production code
-- **Graceful Degradation:** Proper error propagation to callers
-- **Connection Resilience:** Automatic reconnection handling
-
-#### Observability
-- **Logging:** Configurable log levels using standard Rust logging crate[7][8]
-- **Metrics:** Performance counters for requests, latency, errors
-- **Debugging:** Detailed trace information for troubleshooting
-
-#### Security
-- **Key Management:** Secure key generation at server startup
-- **Cryptographic Operations:** Ring-based RSA and ECC implementations[5]
-- **Transport Security:** TLS support for TCP connections
-
-## Technical Architecture
-
-### Technology Stack
-- **Framework:** Tonic gRPC library[2]
-- **Crypto:** Ring cryptography crate
-- **Logging:** log + env_logger crates[7]
-- **Async Runtime:** Tokio
-- **Transport:** TCP + VSOCK via vsock-rs[3]
-
-### Project Structure
-```
-/
-├── Cargo.toml
-├── Makefile
-├── tasks.md
-├── proto/
-│   ├── echo.proto
-│   └── crypto.proto
-├── src/
-│   ├── lib.rs
-│   ├── client.rs
-│   ├── server.rs
-│   ├── services/
-│   │   ├── echo.rs
-│   │   └── crypto.rs
-│   └── transport/
-│       ├── tcp.rs
-│       └── vsock.rs
-├── bin/
-│   ├── server.rs
-│   ├── client.rs
-│   └── benchmark.rs
-└── tests/
-    └── integration.rs
-```
-
-## Task Breakdown
-
-### Phase 1: Foundation (Tasks 1-5)
-**Goal:** Basic project skeleton and build system
-
-- [ ] **Task 1:** Initialize Cargo project with dependencies (Tonic, Ring, log, tokio)
-- [ ] **Task 2:** Create proto definitions for Echo and Crypto services  
-- [ ] **Task 3:** Set up build.rs for proto compilation
-- [ ] **Task 4:** Create basic Makefile with build, test, run targets
-- [ ] **Task 5:** Implement basic logging infrastructure with configurable levels
-
-### Phase 2: Core Services (Tasks 6-10)
-**Goal:** Implement basic gRPC services without transport optimization
-
-- [ ] **Task 6:** Implement Echo service with payload logging
-- [ ] **Task 7:** Generate RSA and ECC key pairs at startup using Ring
-- [ ] **Task 8:** Implement Crypto service with RSA signing
-- [ ] **Task 9:** Implement Crypto service with ECC signing  
-- [ ] **Task 10:** Add proper error handling (no panics/unwrap)
-
-### Phase 3: Transport Layer (Tasks 11-15)
-**Goal:** Support both TCP and VSOCK transports
-
-- [ ] **Task 11:** Implement TCP transport with Tonic
-- [ ] **Task 12:** Integrate VSOCK transport using vsock-rs[3]
-- [ ] **Task 13:** Create transport abstraction layer
-- [ ] **Task 14:** Add transport selection configuration
-- [ ] **Task 15:** Implement connection pooling for performance
-
-### Phase 4: Performance Optimization (Tasks 16-20)
-**Goal:** Maximize throughput and minimize latency
-
-- [ ] **Task 16:** Optimize server for multi-threaded performance[1][9]
-- [ ] **Task 17:** Implement connection reuse strategies[6]
-- [ ] **Task 18:** Add performance monitoring and metrics
-- [ ] **Task 19:** Optimize memory allocation patterns
-- [ ] **Task 20:** Tune Tokio runtime configuration
-
-### Phase 5: Testing & Validation (Tasks 21-25)
-**Goal:** Ensure correctness and measure performance
-
-- [ ] **Task 21:** Create end-to-end integration test
-- [ ] **Task 22:** Test server startup and key generation
-- [ ] **Task 23:** Test client connection and Echo operations
-- [ ] **Task 24:** Test Crypto service RSA and ECC signing
-- [ ] **Task 25:** Validate error handling paths
-
-### Phase 6: Benchmarking (Tasks 26-30)
-**Goal:** Performance measurement and optimization validation
-
-- [ ] **Task 26:** Create configurable benchmark binary
-- [ ] **Task 27:** Implement multi-connection benchmark scenarios
-- [ ] **Task 28:** Add multi-threaded performance testing
-- [ ] **Task 29:** Implement configurable request rate limiting
-- [ ] **Task 30:** Generate performance reports and metrics
-
-## Implementation Specifications
-
-### API Design
+### gRPC Services
 
 #### Echo Service
-```protobuf
-service EchoService {
-  rpc Echo(EchoRequest) returns (EchoResponse);
-}
-
-message EchoRequest {
-  bytes payload = 1;
-  string request_id = 2;
-}
-
-message EchoResponse {
-  bytes payload = 1;
-  string request_id = 2;
-  int64 timestamp = 3;
-}
-```
+- **Functionality**: Log incoming payload and echo it back to client
+- **Logging**: Detailed request/response logging with configurable levels[4][5]
+- **Performance**: Minimal processing overhead for maximum throughput
 
 #### Crypto Service
-```protobuf
-service CryptoService {
-  rpc SignRSA(SignRequest) returns (SignResponse);
-  rpc SignECC(SignRequest) returns (SignResponse);
-}
+- **RSA Signing**: Support RSA signature generation using rust ring crate[6]
+- **ECC Signing**: Support ECC signature generation using rust ring crate[7]
+- **Key Management**: Server generates both RSA and ECC keys at startup
+- **Client Control**: Client specifies key type and algorithm for each request
 
-message SignRequest {
-  bytes data = 1;
-  string algorithm = 2; // "RSA_PSS_SHA256" or "ECDSA_P256_SHA256"
-}
+### Performance Requirements
 
-message SignResponse {
-  bytes signature = 1;
-  string algorithm = 2;
-}
+- **Concurrency**: Support single and multiple gRPC connections[8]
+- **Threading**: Optimized for single and multi-threaded scenarios[2]
+- **Throughput**: Target 100K+ requests per second based on hardware capabilities[2]
+- **Latency**: Sub-millisecond response times for echo operations
+
+## Technical Requirements
+
+### Error Handling
+- **No Panics**: All operations must return proper error codes instead of panicking[9][10]
+- **Error Propagation**: Errors should be returned to caller, never unwrapped
+- **gRPC Status Codes**: Use appropriate gRPC status codes for different error conditions[10]
+
+### Logging
+- **Crate**: Use standard Rust logging crate for compatibility[4][5]
+- **Levels**: Support configurable logging levels (trace, debug, info, warn, error)
+- **Detail**: Comprehensive logging for debugging and monitoring
+- **Performance**: Minimal impact on request processing performance
+
+### Dependencies
+- **Minimal**: Keep crate dependencies to absolute minimum for fast compilation
+- **Features**: Only enable required dependency features
+- **Optimization**: Prioritize compilation speed and runtime performance
+
+## Implementation Structure
+
+### Project Organization
+- **Single Crate**: All components in one Rust crate
+- **Multiple Binaries**: Separate client, server, and benchmark executables
+- **Shared Code**: Common protocol definitions and utilities
+
+### Binaries
+
+#### Server Binary
+- Launch gRPC server with both TCP and VSOCK support
+- Generate RSA and ECC keys at startup
+- Serve echo and crypto services
+- Configurable logging levels
+
+#### Client Binary
+- Connect to server via TCP or VSOCK
+- Support echo and crypto service calls
+- Configurable key type selection
+- Error handling and logging
+
+#### Benchmark Binary
+- **Configurable Connections**: Support multiple connection counts
+- **Threading**: Single and multi-threaded benchmark modes
+- **Request Rate**: Configurable requests per second
+- **Metrics**: Latency, throughput, and error rate measurements
+
+## Testing Requirements
+
+### End-to-End Test
+- **Single Function**: One comprehensive test function
+- **Server Startup**: Launch server programmatically
+- **Client Operations**: Test echo service functionality
+- **Crypto Operations**: Test both RSA and ECC signing
+- **Cleanup**: Proper resource cleanup after testing
+
+### Build System
+- **Makefile**: Minimal makefile with essential targets
+- **Targets**: build, test, run-server, run-client, benchmark
+- **Simplicity**: No complex build configurations or CI/CD
+
+## Development Approach
+
+### Implementation Priority
+1. **Core gRPC Flow**: Basic client-server communication
+2. **Services**: Echo and crypto service implementation
+3. **Error Handling**: Robust error management
+4. **Testing**: End-to-end functionality validation
+5. **Benchmarking**: Performance measurement tools
+
+### Quality Standards
+- **No Placeholders**: All completed tasks must be fully functional
+- **TODO Comments**: Detailed comments for future implementation items
+- **Minimal Scope**: Only implement explicitly requested features
+- **Performance Focus**: Optimize for speed and low latency[3]
+
+## Success Criteria
+
+- **Functional**: All services work end-to-end without errors
+- **Performance**: Achieves target throughput and latency metrics
+- **Reliability**: No panics or unwraps in production code
+- **Maintainable**: Clean code structure with proper error handling
+- **Testable**: Comprehensive test coverage for core functionality
+
+# Tasks Implementation List
+
+Based on the PRD requirements above, here is the generated `tasks.md` file:
+
+## tasks.md
+
+```markdown
+# gRPC High-Performance Client/Server Implementation Tasks
+
+## Phase 1: Project Setup and Core Structure
+- [ ] Create Rust project with Cargo.toml configuration
+- [ ] Define minimal dependencies (tonic, prost, tokio, ring, log)
+- [ ] Set up proto definitions for echo and crypto services
+- [ ] Configure build.rs for proto compilation
+- [ ] Create basic project structure (src/lib.rs, src/bin/)
+
+## Phase 2: Core gRPC Services
+- [ ] Implement echo service proto definition
+- [ ] Implement crypto service proto definition  
+- [ ] Create server binary with basic gRPC server setup
+- [ ] Implement echo service handler with logging
+- [ ] Add TCP transport support to server
+- [ ] Add VSOCK transport support to server
+
+## Phase 3: Cryptographic Services
+- [ ] Implement RSA key generation at server startup
+- [ ] Implement ECC key generation at server startup
+- [ ] Create RSA signing service implementation
+- [ ] Create ECC signing service implementation
+- [ ] Add key type selection logic in crypto service
+
+## Phase 4: Error Handling and Logging
+- [ ] Implement comprehensive error handling (no panics/unwraps)
+- [ ] Add logging crate integration with configurable levels
+- [ ] Add detailed logging to echo service
+- [ ] Add detailed logging to crypto service
+- [ ] Add error propagation for all service methods
+
+## Phase 5: Client Implementation
+- [ ] Create client binary with basic gRPC client setup
+- [ ] Implement echo service client calls
+- [ ] Implement crypto service client calls with key selection
+- [ ] Add TCP transport support to client
+- [ ] Add VSOCK transport support to client
+- [ ] Add proper error handling in client
+
+## Phase 6: Testing
+- [ ] Create end-to-end test function
+- [ ] Add server startup in test
+- [ ] Add echo service test calls
+- [ ] Add RSA crypto service test calls
+- [ ] Add ECC crypto service test calls
+- [ ] Add proper test cleanup and resource management
+
+## Phase 7: Performance Optimization
+- [ ] Implement connection pooling for performance
+- [ ] Add multi-threading support optimization
+- [ ] Optimize for single and multiple connections
+- [ ] Add performance monitoring and metrics
+
+## Phase 8: Benchmark Implementation
+- [ ] Create benchmark binary structure
+- [ ] Add configurable connection count support
+- [ ] Add configurable thread count support
+- [ ] Add configurable request rate limiting
+- [ ] Implement latency and throughput measurements
+- [ ] Add benchmark result reporting
+
+## Phase 9: Build System
+- [ ] Create minimal Makefile
+- [ ] Add build target
+- [ ] Add test target
+- [ ] Add run-server target
+- [ ] Add run-client target
+- [ ] Add benchmark target
+
+## Phase 10: Final Integration and Testing
+- [ ] Integration testing of all components
+- [ ] Performance validation and tuning
+- [ ] Code review and cleanup
+- [ ] Documentation of usage and configuration
+- [ ] Final validation of all requirements
 ```
 
-### Performance Targets
+This implementation plan follows the PRD requirements by breaking down the complex gRPC system into manageable, sequential tasks that can be completed independently while building toward the final high-performance system[11][12].
 
-| Metric | Target | Measurement |
-|--------|--------|-------------|
-| Latency (local) |  80% | CPU utilization under load |
-| Connection Overhead |  50K RPS on single connection (based on Tonic capabilities[1])
-- ✅ Scale linearly with additional connections up to 100 concurrent
-- ✅ Maintain  80% CPU under maximum load
-
-### Quality Success
-- ✅ Zero panics or unwrap() calls in production code paths
-- ✅ Comprehensive error handling with proper error propagation
-- ✅ Configurable logging at all appropriate levels[7]
-- ✅ Clean separation between transport, service, and business logic
-
-## Deliverables
-
-### Core Binaries
-1. **Server Binary:** `cargo run --bin server`
-2. **Client Binary:** `cargo run --bin client`  
-3. **Benchmark Binary:** `cargo run --bin benchmark`
-
-### Makefile Targets
-```makefile
-build:    # Build all binaries
-test:     # Run integration tests  
-server:   # Start gRPC server
-client:   # Run sample client operations
-benchmark: # Execute performance benchmarks
-clean:    # Clean build artifacts
-```
-
-### Documentation
-- README with quick start guide
-- Performance benchmarking results
-- Configuration reference
-- API documentation (generated from proto files)
-
-This PRD provides a structured approach to building a high-performance gRPC system in Rust, breaking down the work into manageable tasks while maintaining focus on the core performance and reliability requirements[2][10].
-
-[1] https://www.reddit.com/r/rust/comments/uliuuo/tested_rust_tonic_grpc_server_performance/
-[2] https://github.com/hyperium/tonic
-[3] https://github.com/rust-vsock/vsock-rs
-[4] https://chromium.googlesource.com/chromiumos/platform2/+/HEAD/vm_tools/README.md
-[5] https://tikv.github.io/doc/ring/index.html
-[6] https://users.rust-lang.org/t/is-my-concurrent-use-of-grpc-safe/113328
-[7] https://www.shuttle.dev/blog/2023/09/20/logging-in-rust
-[8] https://github.com/psFried/rust-logging
-[9] https://users.rust-lang.org/t/tonic-performance-issue/69970
-[10] https://maggnus.com/harnessing-the-power-of-rust-and-grpc-for-efficient-communication-15613b4dbc6b
-[11] https://dockyard.com/blog/2025/04/08/grpc-basics-for-rust-developers
-[12] https://github.com/hyperium/tonic/issues/103
-[13] https://earvinkayonga.com/posts/grpc-annotations-and-rust/
-[14] https://github.com/grpc/grpc-node/issues/1403
-[15] https://konghq.com/blog/engineering/building-grpc-apis-with-rust
-[16] https://lib.rs/crates/kaspa-grpc-client
-[17] https://github.com/dirien/rust-grpc
-[18] https://stackoverflow.com/questions/58122623/rejecting-mutual-tls-grpc-connection-based-on-rsa-public-key-size
+[1] https://github.com/hyperium/tonic/issues/103
+[2] https://www.reddit.com/r/rust/comments/uliuuo/tested_rust_tonic_grpc_server_performance/
+[3] https://grpc.io/docs/guides/performance/
+[4] https://www.shuttle.dev/blog/2023/09/20/logging-in-rust
+[5] https://docs.rs/log
+[6] https://github.com/RustCrypto/RSA
+[7] https://mojoauth.com/encryption-decryption/ecc-256-encryption--rust/
+[8] https://users.rust-lang.org/t/is-my-concurrent-use-of-grpc-safe/113328
+[9] https://www.bytesizego.com/blog/mastering-grpc-go-error-handling
+[10] https://grpc.io/docs/guides/error/
+[11] https://beam.ai/tools/product-requirements-document
+[12] https://chatprd.ai/resources/using-ai-to-write-prd
+[13] https://www.chatprd.ai
+[14] https://www.reddit.com/r/ProductManagement/comments/1k0ynnj/how_do_product_requirements_work_for_ai_agent/
+[15] https://community.n8n.io/t/best-approach-to-use-two-ai-agents-for-generating-prd-and-coding-plan-in-n8n/86965
+[16] https://earvinkayonga.com/posts/grpc-annotations-and-rust/
+[17] https://www.reforge.com/guides/write-a-prd-for-a-generative-ai-feature
+[18] https://github.com/grpc-ecosystem/grpc-cloud-run-example/blob/master/rust/README.md
 [19] https://www.reddit.com/r/rust/comments/hs5k36/benchmarking_grpc_in_rust_and_go/
-[20] https://www.reddit.com/r/rust/comments/14igh7v/20230625_grpc_benchmark_results/
+[20] https://www.youtube.com/watch?v=roE6MvcYGTw

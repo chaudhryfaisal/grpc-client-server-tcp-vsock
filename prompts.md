@@ -1,6 +1,5 @@
 # Initial Promp 
-create complete PRD for ai coding agent, keep tasks small and start from skeleton of the project and build up the functionality
-agent should generate tasks list and save them in tasks.md and check off tasks as they are completed
+create complete PRD for ai coding agent, split implementation into small tasks, agent should generate tasks list and save them in tasks.md and check off tasks as they are completed
 
 generate prd for maximize performance and minimal latency grpc client and server in rust which supports both TCP and VSOCK
 - maximize performance over single or multiple grpc connections, for single or multiple threads
@@ -12,9 +11,13 @@ generate prd for maximize performance and minimal latency grpc client and server
 - generate single function test to test end to end functionality to launch the server, then client to connect and perform echo, and crypto ecc and rsa sign operations.
 - add benchmark bin which should have configurable connections and threads to measure performance over single threads or multiple thread, at configureable request per second
 - generate all code in single crate with client, server and benchmark binaries
-- dont need cicd or documentation in initial phase
-- focus on end to end working example before writing test cases and benchmark client
+- do not need cicd or documentation in initial phase
 - generate minimal makefile to build, test, run client, run server, and benchmark
+- start from skeleton of the project and build up the functionality
+- prioritize on end to end working client and server flow before writing test cases and benchmark client
+- do not use placeholder or mock implementations , once task is completed, it should be fully functional, if you must come back to an implementation then add proper TODO with detailed comments to it can be properly implemented later
+- do not implement any additional functionality not explicitly requested in the requirements
+- keep rust crate dependency to minimal and dependency features to be minimal to optimize compilation time
 
 # Kilo Code Orchestrator Prompt 
 continue to implement prd from @/prd.md , generate tasks list and save them in tasks.md and check off tasks as they are completed, if tasks.md already exist then resume work to complete remaining tasks.md
