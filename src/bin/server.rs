@@ -79,20 +79,23 @@ impl CryptoService for CryptoServiceImpl {
         );
 
         // Perform signing based on key type and algorithm
-        let signature = match (KeyType::from_i32(req.key_type), SigningAlgorithm::from_i32(req.algorithm)) {
-            (Some(KeyType::Rsa), Some(SigningAlgorithm::RsaPkcs1Sha256)) => {
+        let key_type = KeyType::try_from(req.key_type).map_err(|_| Status::invalid_argument("Invalid key type"))?;
+        let algorithm = SigningAlgorithm::try_from(req.algorithm).map_err(|_| Status::invalid_argument("Invalid algorithm"))?;
+        
+        let signature = match (key_type, algorithm) {
+            (KeyType::Rsa, SigningAlgorithm::RsaPkcs1Sha256) => {
                 self.crypto_keys.sign_rsa_pkcs1_sha256(&req.data)
                     .map_err(|e| Status::internal(format!("RSA PKCS#1 signing failed: {}", e)))?
             }
-            (Some(KeyType::Rsa), Some(SigningAlgorithm::RsaPssSha256)) => {
+            (KeyType::Rsa, SigningAlgorithm::RsaPssSha256) => {
                 self.crypto_keys.sign_rsa_pss_sha256(&req.data)
                     .map_err(|e| Status::internal(format!("RSA PSS signing failed: {}", e)))?
             }
-            (Some(KeyType::Ecc), Some(SigningAlgorithm::EcdsaP256Sha256)) => {
+            (KeyType::Ecc, SigningAlgorithm::EcdsaP256Sha256) => {
                 self.crypto_keys.sign_ecdsa_p256_sha256(&req.data)
                     .map_err(|e| Status::internal(format!("ECDSA P-256 signing failed: {}", e)))?
             }
-            (Some(KeyType::Ecc), Some(SigningAlgorithm::EcdsaP384Sha256)) => {
+            (KeyType::Ecc, SigningAlgorithm::EcdsaP384Sha256) => {
                 self.crypto_keys.sign_ecdsa_p384_sha384(&req.data)
                     .map_err(|e| Status::internal(format!("ECDSA P-384 signing failed: {}", e)))?
             }
@@ -135,7 +138,7 @@ impl CryptoService for CryptoServiceImpl {
         );
 
         // Get public key based on key type
-        let public_key_der = match KeyType::from_i32(req.key_type) {
+        let public_key_der = match KeyType::try_from(req.key_type) {
             Some(KeyType::Rsa) => {
                 self.crypto_keys.get_rsa_public_key_der()
                     .map_err(|e| Status::internal(format!("RSA public key retrieval failed: {}", e)))?
@@ -170,8 +173,7 @@ impl CryptoService for CryptoServiceImpl {
     }
 }
 
-#[tokio::main]
-async fn main() -> AppResult<()> {
+fn main() -> AppResult<()> {
     // Initialize logging
     let log_level = env::var("RUST_LOG").unwrap_or_else(|_| DEFAULT_LOG_LEVEL.to_string());
     env::set_var("RUST_LOG", log_level);
@@ -186,35 +188,66 @@ async fn main() -> AppResult<()> {
             std::io::Error::new(std::io::ErrorKind::InvalidInput, e)
         })?;
 
-    info!("Starting gRPC server on {}", addr);
+    // Get number of worker threads from environment or use all available CPU cores
+    let worker_threads = env::var("WORKER_THREADS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or_else(|| num_cpus::get());
 
-    // Create echo service
-    let echo_service = EchoServiceImpl::default();
-    
-    // Create crypto service
-    let crypto_service = CryptoServiceImpl::new()
+    info!("Starting gRPC server on {} with {} worker threads", addr, worker_threads);
+
+    // Optimize tokio runtime for better multi-threading performance
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(worker_threads)
+        .thread_name("grpc-server-worker")
+        .thread_stack_size(3 * 1024 * 1024) // 3MB stack size
+        .enable_all()
+        .build()
         .map_err(|e| {
-            error!("Failed to initialize crypto service: {}", e);
+            error!("Failed to build tokio runtime: {}", e);
             std::io::Error::new(std::io::ErrorKind::Other, e)
         })?;
-    
-    info!("Crypto keys generated successfully");
 
-    // Build and start the server
-    let server_result = Server::builder()
-        .add_service(EchoServiceServer::new(echo_service))
-        .add_service(CryptoServiceServer::new(crypto_service))
-        .serve(addr)
-        .await;
+    runtime.block_on(async {
+        // Create echo service
+        let echo_service = EchoServiceImpl::default();
+        
+        // Create crypto service
+        let crypto_service = CryptoServiceImpl::new()
+            .map_err(|e| {
+                error!("Failed to initialize crypto service: {}", e);
+                std::io::Error::new(std::io::ErrorKind::Other, e)
+            })?;
+        
+        info!("Crypto keys generated successfully");
 
-    match server_result {
-        Ok(_) => {
-            info!("Server shutdown gracefully");
-            Ok(())
+        // Configure server with optimizations
+        let mut server_builder = Server::builder()
+            .tcp_keepalive(Some(std::time::Duration::from_secs(30)))
+            .tcp_nodelay(true)
+            .http2_keepalive_interval(Some(std::time::Duration::from_secs(30)))
+            .http2_adaptive_window(Some(true))
+            .max_concurrent_streams(Some(1000))
+            .initial_stream_window_size(Some(1024 * 1024)) // 1MB
+            .initial_connection_window_size(Some(1024 * 1024)) // 1MB
+            .max_frame_size(Some(16384)); // 16KB
+
+        // Build and start the server
+        let server_result = server_builder
+            .add_service(EchoServiceServer::new(echo_service))
+            .add_service(CryptoServiceServer::new(crypto_service))
+            .serve(addr)
+            .await;
+
+        match server_result {
+            Ok(_) => {
+                info!("Server shutdown gracefully");
+                Ok(())
+            }
+            Err(e) => {
+                error!("Server error: {}", e);
+                Err(e.into())
+            }
         }
-        Err(e) => {
-            error!("Server error: {}", e);
-            Err(e.into())
-        }
-    }
+    })
 }
