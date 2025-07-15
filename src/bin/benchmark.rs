@@ -12,7 +12,7 @@ use grpc_performance_rs::{
 use log::{error, info};
 use std::env;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
@@ -259,9 +259,11 @@ impl BenchmarkConfig {
             return Err("Number of threads must be greater than 0".into());
         }
 
-        if requests == 0 && duration.is_none() {
+        // For duration-based benchmarks, requests parameter is ignored
+        // For count-based benchmarks, requests must be > 0
+        if duration.is_none() && requests == 0 {
             return Err(
-                "Either requests count must be greater than 0 or duration must be specified".into(),
+                "For count-based benchmarks, requests must be greater than 0. Use --duration for time-based benchmarks.".into(),
             );
         }
 
@@ -298,14 +300,16 @@ fn parse_duration(duration_str: &str) -> Option<u64> {
     }
 }
 
-async fn create_optimized_channel(addr: &str) -> AppResult<Channel> {
+/// Create a pool of reusable channels for efficient connection management
+async fn create_channel_pool(addr: &str, pool_size: usize) -> AppResult<Vec<Channel>> {
     let transport_config = TransportConfig::from_str(&addr).map_err(|e| {
         error!("Invalid server address '{}': {}", addr, e);
         std::io::Error::new(std::io::ErrorKind::InvalidInput, e)
     })?;
 
     info!(
-        "Starting gRPC client, connecting to {} ({})",
+        "Creating channel pool: {} channels to {} ({})",
+        pool_size,
         transport_config,
         if transport_config.is_tcp() {
             "TCP"
@@ -313,86 +317,148 @@ async fn create_optimized_channel(addr: &str) -> AppResult<Channel> {
             "VSOCK"
         }
     );
-    create_transport_channel(&transport_config).await
+
+    let mut channels = Vec::with_capacity(pool_size);
+    for _ in 0..pool_size {
+        let channel = create_transport_channel(&transport_config).await?;
+        channels.push(channel);
+    }
+
+    Ok(channels)
 }
 
-async fn benchmark_echo_service(
-    addr: &str,
+/// Service type for unified benchmark function
+#[derive(Clone, Copy)]
+enum ServiceType {
+    Echo,
+    Crypto,
+}
+
+/// Execute a single request for the specified service type
+async fn execute_request(
+    service_type: ServiceType,
+    channel: Channel,
+    request_id: u64,
+) -> Result<u64, ()> {
+    let start_time = Instant::now();
+
+    let result = match service_type {
+        ServiceType::Echo => {
+            let mut client = EchoServiceClient::new(channel);
+            let request = EchoRequest {
+                payload: format!("Benchmark request {}", request_id),
+                timestamp: current_timestamp_millis(),
+            };
+            client.echo(request).await.map(|_| ())
+        }
+        ServiceType::Crypto => {
+            let mut client = CryptoServiceClient::new(channel);
+            let request = SignRequest {
+                data: format!("Benchmark data {}", request_id).into_bytes(),
+                key_type: KeyType::Rsa as i32,
+                algorithm: SigningAlgorithm::RsaPkcs1Sha256 as i32,
+                timestamp: current_timestamp_millis(),
+            };
+            client.sign(request).await.map(|_| ())
+        }
+    };
+
+    match result {
+        Ok(_) => Ok(start_time.elapsed().as_micros() as u64),
+        Err(_) => Err(()),
+    }
+}
+
+/// Simplified unified benchmark function
+async fn run_benchmark(
+    service_type: ServiceType,
+    channels: Arc<Vec<Channel>>,
     concurrent_requests: usize,
     total_requests: usize,
     metrics: BenchmarkMetrics,
     rate_limit: Option<u64>,
     duration: Option<u64>,
 ) -> AppResult<()> {
+    let service_name = match service_type {
+        ServiceType::Echo => "echo",
+        ServiceType::Crypto => "crypto",
+    };
+
     info!(
-        "Starting echo service benchmark: {} concurrent, {} total requests",
-        concurrent_requests, total_requests
+        "Starting {} service benchmark: {} concurrent connections",
+        service_name, concurrent_requests
     );
 
     let semaphore = Arc::new(Semaphore::new(concurrent_requests));
+    let stop_flag = Arc::new(AtomicBool::new(false));
+    let request_counter = Arc::new(AtomicU64::new(0));
+
+    // Start duration timer if specified
+    if let Some(duration_secs) = duration {
+        let stop_flag_clone = stop_flag.clone();
+        tokio::spawn(async move {
+            sleep(Duration::from_secs(duration_secs)).await;
+            stop_flag_clone.store(true, Ordering::Relaxed);
+        });
+    }
+
+    // Calculate rate limiting interval
+    // For duration-based benchmarks without rate limit, use a reasonable default to prevent overwhelming
+    let effective_rate_limit = if duration.is_some() && rate_limit.is_none() {
+        Some(1000) // Default to 1000 RPS for duration-based benchmarks
+    } else {
+        rate_limit
+    };
+    
+    let rate_interval = effective_rate_limit.map(|rps| Duration::from_nanos(1_000_000_000 / rps));
+
     let mut tasks = Vec::new();
+    let mut last_request_time = Instant::now();
 
-    let end_time = duration.map(|d| Instant::now() + Duration::from_secs(d));
-    let mut request_count = 0;
-
+    // Main request loop - unified for both duration and count-based benchmarks
     loop {
-        // Check if we should stop based on duration or request count
-        if let Some(end) = end_time {
-            if Instant::now() >= end {
-                break;
-            }
-        } else if request_count >= total_requests {
+        // Check stopping conditions
+        let current_count = request_counter.load(Ordering::Relaxed);
+        
+        // Stop if duration expired
+        if stop_flag.load(Ordering::Relaxed) {
+            break;
+        }
+        
+        // Stop if we've reached the request limit (only for count-based benchmarks)
+        if duration.is_none() && current_count >= total_requests as u64 {
             break;
         }
 
+        // Apply rate limiting
+        if let Some(interval) = rate_interval {
+            let next_request_time = last_request_time + interval;
+            let now = Instant::now();
+            if now < next_request_time {
+                sleep(next_request_time - now).await;
+            }
+            last_request_time = Instant::now();
+        }
+
+        // Get next request ID and select channel
+        let request_id = request_counter.fetch_add(1, Ordering::Relaxed);
+        let channel_index = request_id as usize % channels.len();
+        let channel = channels[channel_index].clone();
+        
+        // Clone shared resources for the task
         let semaphore = semaphore.clone();
         let metrics = metrics.clone();
-        let addr = addr.to_string();
-        let i = request_count;
 
         let task = tokio::spawn(async move {
             let _permit = semaphore.acquire().await.unwrap();
-
-            let start_time = Instant::now();
-
-            match create_optimized_channel(&addr).await {
-                Ok(channel) => {
-                    let mut client = EchoServiceClient::new(channel);
-                    let request = EchoRequest {
-                        payload: format!("Benchmark request {}", i),
-                        timestamp: current_timestamp_millis(),
-                    };
-
-                    match client.echo(request).await {
-                        Ok(_) => {
-                            let latency = start_time.elapsed().as_micros() as u64;
-                            metrics.record_success(latency);
-                        }
-                        Err(_) => {
-                            metrics.record_failure();
-                        }
-                    }
-                }
-                Err(_) => {
-                    metrics.record_failure();
-                }
+            
+            match execute_request(service_type, channel, request_id).await {
+                Ok(latency) => metrics.record_success(latency),
+                Err(_) => metrics.record_failure(),
             }
         });
 
         tasks.push(task);
-
-        // Apply rate limiting if specified
-        if let Some(rps) = rate_limit {
-            let interval = Duration::from_nanos(1_000_000_000 / rps);
-            sleep(interval).await;
-        }
-
-        request_count += 1;
-
-        // For duration-based tests, don't limit by total_requests
-        if duration.is_none() && request_count >= total_requests {
-            break;
-        }
     }
 
     // Wait for all tasks to complete
@@ -403,93 +469,36 @@ async fn benchmark_echo_service(
     Ok(())
 }
 
-async fn benchmark_crypto_service(
-    addr: &str,
-    concurrent_requests: usize,
-    total_requests: usize,
-    metrics: BenchmarkMetrics,
-    rate_limit: Option<u64>,
-    duration: Option<u64>,
-) -> AppResult<()> {
+fn print_results(service_name: &str, metrics: &BenchmarkMetrics, duration: Duration) {
+    let (total, successful, failed, avg_latency, min_latency, max_latency) = metrics.get_stats();
+
+    info!("\n=== {} Service Benchmark Results ===", service_name);
+    info!("Total requests: {}", total);
+    info!("Successful requests: {}", successful);
+    info!("Failed requests: {}", failed);
     info!(
-        "Starting crypto service benchmark: {} concurrent, {} total requests",
-        concurrent_requests, total_requests
+        "Success rate: {:.2}%",
+        if total > 0 {
+            (successful as f64 / total as f64) * 100.0
+        } else {
+            0.0
+        }
     );
-
-    let semaphore = Arc::new(Semaphore::new(concurrent_requests));
-    let mut tasks = Vec::new();
-
-    let end_time = duration.map(|d| Instant::now() + Duration::from_secs(d));
-    let mut request_count = 0;
-
-    loop {
-        // Check if we should stop based on duration or request count
-        if let Some(end) = end_time {
-            if Instant::now() >= end {
-                break;
-            }
-        } else if request_count >= total_requests {
-            break;
+    info!("Duration: {:?}", duration);
+    info!(
+        "Requests per second: {:.2}",
+        successful as f64 / duration.as_secs_f64()
+    );
+    info!("Average latency: {:.2} μs", avg_latency);
+    info!(
+        "Min latency: {} μs",
+        if min_latency == u64::MAX {
+            0
+        } else {
+            min_latency
         }
-
-        let semaphore = semaphore.clone();
-        let metrics = metrics.clone();
-        let addr = addr.to_string();
-        let i = request_count;
-
-        let task = tokio::spawn(async move {
-            let _permit = semaphore.acquire().await.unwrap();
-
-            let start_time = Instant::now();
-
-            match create_optimized_channel(&addr).await {
-                Ok(channel) => {
-                    let mut client = CryptoServiceClient::new(channel);
-                    let request = SignRequest {
-                        data: format!("Benchmark data {}", i).into_bytes(),
-                        key_type: KeyType::Rsa as i32,
-                        algorithm: SigningAlgorithm::RsaPkcs1Sha256 as i32,
-                        timestamp: current_timestamp_millis(),
-                    };
-
-                    match client.sign(request).await {
-                        Ok(_) => {
-                            let latency = start_time.elapsed().as_micros() as u64;
-                            metrics.record_success(latency);
-                        }
-                        Err(_) => {
-                            metrics.record_failure();
-                        }
-                    }
-                }
-                Err(_) => {
-                    metrics.record_failure();
-                }
-            }
-        });
-
-        tasks.push(task);
-
-        // Apply rate limiting if specified
-        if let Some(rps) = rate_limit {
-            let interval = Duration::from_nanos(1_000_000_000 / rps);
-            sleep(interval).await;
-        }
-
-        request_count += 1;
-
-        // For duration-based tests, don't limit by total_requests
-        if duration.is_none() && request_count >= total_requests {
-            break;
-        }
-    }
-
-    // Wait for all tasks to complete
-    for task in tasks {
-        let _ = task.await;
-    }
-
-    Ok(())
+    );
+    info!("Max latency: {} μs", max_latency);
 }
 
 #[tokio::main]
@@ -511,33 +520,36 @@ async fn main() -> AppResult<()> {
     info!("Server: {}", config.server_addr);
     info!("Concurrent connections: {}", config.connections);
     info!("Worker threads: {}", config.threads);
-    info!("Total requests: {}", config.requests);
+    
+    if let Some(duration) = config.duration {
+        info!("Duration: {} seconds", duration);
+    } else {
+        info!("Total requests: {}", config.requests);
+    }
+    
     if let Some(rate) = config.rate_limit {
         info!("Rate limit: {} requests/second", rate);
     }
     info!("Transport: {}", config.transport);
     info!("Service: {}", config.service);
-    if let Some(duration) = config.duration {
-        info!("Duration: {} seconds", duration);
-    }
 
-    // Use the existing variable names for compatibility with existing benchmark functions
-    let server_addr = config.server_addr;
-    let concurrent_requests = config.connections;
-    let total_requests = config.requests;
-    let benchmark_type = config.service;
+    // Create channel pool for connection reuse
+    let channels = Arc::new(
+        create_channel_pool(&config.server_addr, config.connections).await?
+    );
 
     let overall_start = Instant::now();
 
-    match benchmark_type.as_str() {
+    match config.service.as_str() {
         "echo" => {
             let metrics = BenchmarkMetrics::new();
             let start_time = Instant::now();
 
-            benchmark_echo_service(
-                &server_addr,
-                concurrent_requests,
-                total_requests,
+            run_benchmark(
+                ServiceType::Echo,
+                channels,
+                config.connections,
+                config.requests,
                 metrics.clone(),
                 config.rate_limit,
                 config.duration,
@@ -545,41 +557,17 @@ async fn main() -> AppResult<()> {
             .await?;
 
             let duration = start_time.elapsed();
-            let (total, successful, failed, avg_latency, min_latency, max_latency) =
-                metrics.get_stats();
-
-            info!("\n=== Echo Service Benchmark Results ===");
-            info!("Total requests: {}", total);
-            info!("Successful requests: {}", successful);
-            info!("Failed requests: {}", failed);
-            info!(
-                "Success rate: {:.2}%",
-                (successful as f64 / total as f64) * 100.0
-            );
-            info!("Duration: {:?}", duration);
-            info!(
-                "Requests per second: {:.2}",
-                successful as f64 / duration.as_secs_f64()
-            );
-            info!("Average latency: {:.2} μs", avg_latency);
-            info!(
-                "Min latency: {} μs",
-                if min_latency == u64::MAX {
-                    0
-                } else {
-                    min_latency
-                }
-            );
-            info!("Max latency: {} μs", max_latency);
+            print_results("Echo", &metrics, duration);
         }
         "crypto" => {
             let metrics = BenchmarkMetrics::new();
             let start_time = Instant::now();
 
-            benchmark_crypto_service(
-                &server_addr,
-                concurrent_requests,
-                total_requests,
+            run_benchmark(
+                ServiceType::Crypto,
+                channels,
+                config.connections,
+                config.requests,
                 metrics.clone(),
                 config.rate_limit,
                 config.duration,
@@ -587,42 +575,18 @@ async fn main() -> AppResult<()> {
             .await?;
 
             let duration = start_time.elapsed();
-            let (total, successful, failed, avg_latency, min_latency, max_latency) =
-                metrics.get_stats();
-
-            info!("\n=== Crypto Service Benchmark Results ===");
-            info!("Total requests: {}", total);
-            info!("Successful requests: {}", successful);
-            info!("Failed requests: {}", failed);
-            info!(
-                "Success rate: {:.2}%",
-                (successful as f64 / total as f64) * 100.0
-            );
-            info!("Duration: {:?}", duration);
-            info!(
-                "Requests per second: {:.2}",
-                successful as f64 / duration.as_secs_f64()
-            );
-            info!("Average latency: {:.2} μs", avg_latency);
-            info!(
-                "Min latency: {} μs",
-                if min_latency == u64::MAX {
-                    0
-                } else {
-                    min_latency
-                }
-            );
-            info!("Max latency: {} μs", max_latency);
+            print_results("Crypto", &metrics, duration);
         }
         "both" | _ => {
             // Benchmark echo service
             let echo_metrics = BenchmarkMetrics::new();
             let echo_start = Instant::now();
 
-            benchmark_echo_service(
-                &server_addr,
-                concurrent_requests,
-                total_requests,
+            run_benchmark(
+                ServiceType::Echo,
+                channels.clone(),
+                config.connections,
+                config.requests,
                 echo_metrics.clone(),
                 config.rate_limit,
                 config.duration,
@@ -630,23 +594,17 @@ async fn main() -> AppResult<()> {
             .await?;
 
             let echo_duration = echo_start.elapsed();
-            let (
-                echo_total,
-                echo_successful,
-                echo_failed,
-                echo_avg_latency,
-                echo_min_latency,
-                echo_max_latency,
-            ) = echo_metrics.get_stats();
+            print_results("Echo", &echo_metrics, echo_duration);
 
             // Benchmark crypto service
             let crypto_metrics = BenchmarkMetrics::new();
             let crypto_start = Instant::now();
 
-            benchmark_crypto_service(
-                &server_addr,
-                concurrent_requests,
-                total_requests,
+            run_benchmark(
+                ServiceType::Crypto,
+                channels,
+                config.connections,
+                config.requests,
                 crypto_metrics.clone(),
                 config.rate_limit,
                 config.duration,
@@ -654,63 +612,7 @@ async fn main() -> AppResult<()> {
             .await?;
 
             let crypto_duration = crypto_start.elapsed();
-            let (
-                crypto_total,
-                crypto_successful,
-                crypto_failed,
-                crypto_avg_latency,
-                crypto_min_latency,
-                crypto_max_latency,
-            ) = crypto_metrics.get_stats();
-
-            info!("\n=== Combined Benchmark Results ===");
-            info!("Echo Service:");
-            info!("  Total requests: {}", echo_total);
-            info!("  Successful requests: {}", echo_successful);
-            info!("  Failed requests: {}", echo_failed);
-            info!(
-                "  Success rate: {:.2}%",
-                (echo_successful as f64 / echo_total as f64) * 100.0
-            );
-            info!("  Duration: {:?}", echo_duration);
-            info!(
-                "  Requests per second: {:.2}",
-                echo_successful as f64 / echo_duration.as_secs_f64()
-            );
-            info!("  Average latency: {:.2} μs", echo_avg_latency);
-            info!(
-                "  Min latency: {} μs",
-                if echo_min_latency == u64::MAX {
-                    0
-                } else {
-                    echo_min_latency
-                }
-            );
-            info!("  Max latency: {} μs", echo_max_latency);
-
-            info!("Crypto Service:");
-            info!("  Total requests: {}", crypto_total);
-            info!("  Successful requests: {}", crypto_successful);
-            info!("  Failed requests: {}", crypto_failed);
-            info!(
-                "  Success rate: {:.2}%",
-                (crypto_successful as f64 / crypto_total as f64) * 100.0
-            );
-            info!("  Duration: {:?}", crypto_duration);
-            info!(
-                "  Requests per second: {:.2}",
-                crypto_successful as f64 / crypto_duration.as_secs_f64()
-            );
-            info!("  Average latency: {:.2} μs", crypto_avg_latency);
-            info!(
-                "  Min latency: {} μs",
-                if crypto_min_latency == u64::MAX {
-                    0
-                } else {
-                    crypto_min_latency
-                }
-            );
-            info!("  Max latency: {} μs", crypto_max_latency);
+            print_results("Crypto", &crypto_metrics, crypto_duration);
         }
     }
 
