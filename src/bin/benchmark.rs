@@ -402,63 +402,90 @@ async fn run_benchmark(
         });
     }
 
-    // Calculate rate limiting interval
-    // For duration-based benchmarks without rate limit, use a reasonable default to prevent overwhelming
-    let effective_rate_limit = if duration.is_some() && rate_limit.is_none() {
-        Some(1000) // Default to 1000 RPS for duration-based benchmarks
-    } else {
-        rate_limit
-    };
-    
-    let rate_interval = effective_rate_limit.map(|rps| Duration::from_nanos(1_000_000_000 / rps));
+    // Calculate rate limiting interval (only apply if explicitly specified)
+    let rate_interval = rate_limit.map(|rps| Duration::from_nanos(1_000_000_000 / rps));
 
     let mut tasks = Vec::new();
-    let mut last_request_time = Instant::now();
 
-    // Main request loop - unified for both duration and count-based benchmarks
-    loop {
-        // Check stopping conditions
-        let current_count = request_counter.load(Ordering::Relaxed);
-        
-        // Stop if duration expired
-        if stop_flag.load(Ordering::Relaxed) {
-            break;
-        }
-        
-        // Stop if we've reached the request limit (only for count-based benchmarks)
-        if duration.is_none() && current_count >= total_requests as u64 {
-            break;
-        }
+    // For duration-based benchmarks, spawn concurrent workers that run continuously
+    if duration.is_some() {
+        // Spawn concurrent workers that continuously make requests
+        for _i in 0..concurrent_requests {
+            let channels = channels.clone();
+            let stop_flag = stop_flag.clone();
+            let request_counter = request_counter.clone();
+            let metrics = metrics.clone();
+            let rate_interval = rate_interval;
 
-        // Apply rate limiting
-        if let Some(interval) = rate_interval {
-            let next_request_time = last_request_time + interval;
-            let now = Instant::now();
-            if now < next_request_time {
-                sleep(next_request_time - now).await;
+            let task = tokio::spawn(async move {
+                let mut last_request_time = Instant::now();
+                
+                while !stop_flag.load(Ordering::Relaxed) {
+                    // Apply rate limiting per worker if specified
+                    if let Some(interval) = rate_interval {
+                        let worker_interval = Duration::from_nanos(interval.as_nanos() as u64 * concurrent_requests as u64);
+                        let next_request_time = last_request_time + worker_interval;
+                        let now = Instant::now();
+                        if now < next_request_time {
+                            sleep(next_request_time - now).await;
+                        }
+                        last_request_time = Instant::now();
+                    }
+
+                    // Get next request ID and select channel
+                    let request_id = request_counter.fetch_add(1, Ordering::Relaxed);
+                    let channel_index = request_id as usize % channels.len();
+                    let channel = channels[channel_index].clone();
+                    
+                    match execute_request(service_type, channel, request_id).await {
+                        Ok(latency) => metrics.record_success(latency),
+                        Err(_) => metrics.record_failure(),
+                    }
+                }
+            });
+
+            tasks.push(task);
+        }
+    } else {
+        // For count-based benchmarks, use the original approach but without artificial rate limiting
+        let mut last_request_time = Instant::now();
+
+        // Main request loop for count-based benchmarks
+        for request_id in 0..total_requests {
+            // Check if we should stop
+            if stop_flag.load(Ordering::Relaxed) {
+                break;
             }
-            last_request_time = Instant::now();
-        }
 
-        // Get next request ID and select channel
-        let request_id = request_counter.fetch_add(1, Ordering::Relaxed);
-        let channel_index = request_id as usize % channels.len();
-        let channel = channels[channel_index].clone();
-        
-        // Clone shared resources for the task
-        let semaphore = semaphore.clone();
-        let metrics = metrics.clone();
+            // Apply rate limiting only if explicitly specified
+            if let Some(interval) = rate_interval {
+                let next_request_time = last_request_time + interval;
+                let now = Instant::now();
+                if now < next_request_time {
+                    sleep(next_request_time - now).await;
+                }
+                last_request_time = Instant::now();
+            }
 
-        let task = tokio::spawn(async move {
-            let _permit = semaphore.acquire().await.unwrap();
+            // Select channel
+            let channel_index = request_id % channels.len();
+            let channel = channels[channel_index].clone();
             
-            match execute_request(service_type, channel, request_id).await {
-                Ok(latency) => metrics.record_success(latency),
-                Err(_) => metrics.record_failure(),
-            }
-        });
+            // Clone shared resources for the task
+            let semaphore = semaphore.clone();
+            let metrics = metrics.clone();
 
-        tasks.push(task);
+            let task = tokio::spawn(async move {
+                let _permit = semaphore.acquire().await.unwrap();
+                
+                match execute_request(service_type, channel, request_id as u64).await {
+                    Ok(latency) => metrics.record_success(latency),
+                    Err(_) => metrics.record_failure(),
+                }
+            });
+
+            tasks.push(task);
+        }
     }
 
     // Wait for all tasks to complete
