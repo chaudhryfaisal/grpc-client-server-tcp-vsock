@@ -25,18 +25,22 @@ test:
 
 # Start the gRPC server in background
 # Depends on 'build' to ensure the binary is up-to-date
+PID_FILE := $(TARGET_DIR).pid
 server: build
 	@echo "Stopping any existing server processes..."
-	@pkill -f "$(TARGET_DIR)/server" 2>/dev/null || true
+	@if [ -f $(PID_FILE) ]; then \
+		kill -9 `cat $(PID_FILE)` 2>/dev/null || true; \
+		rm -f $(PID_FILE); \
+	fi
 	@echo "Starting gRPC server in background..."
-	@$(TARGET_DIR)/server &
-	@sleep 2
-	@echo "Server is running in background (use 'make stop-server' to stop)"
+	@nohup $(TARGET_DIR)/server > server.log 2>&1 & echo $$! > $(PID_FILE)
+	@sleep 2 && cat server.log
+	@echo "Server is running in background with PID `cat $(PID_FILE)` (use 'make server-stop' to stop)"
 
 # Stop the gRPC server
-stop-server:
+server-stop:
 	@echo "Stopping gRPC server..."
-	@pkill -f "$(TARGET_DIR)/server" 2>/dev/null || echo "No server process found"
+	@kill -9 `cat $(PID_FILE)` 2>/dev/null || true;
 
 # Run the sample client
 # Depends on 'build' to ensure the binary is up-to-date
