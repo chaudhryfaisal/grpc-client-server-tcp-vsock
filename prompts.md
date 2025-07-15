@@ -25,11 +25,13 @@ generate prd for maximize performance and minimal latency grpc client and server
 
 
 # Kilo Code Orchestrator Prompt 
-1. continue to implement prd from @/prd.md , generate tasks list and save them in tasks.md and check off tasks as they are completed, if tasks.md already exist then resume work to complete remaining tasks.md
+- continue to implement prd from @/prd.md , generate tasks list and save them in tasks.md and check off tasks as they are completed, if tasks.md already exist then resume work to complete remaining tasks.md
 
-2. continue to implement remaining tasks from @/tasks.md and check off tasks as they are completed, prioritize vsock related tasks
+- continue to implement remaining tasks from @/tasks.md and check off tasks as they are completed, prioritize vsock related tasks
 
-3. continue to implement remaining tasks from @/tasks.md and check off tasks as they are completed, when launching server from command line, always launch as background process since it will be blocking terminal for ever, also before launching try to close previous instance to avoid port conflicts
+- continue to implement remaining tasks from @/tasks.md and check off tasks as they are completed, when launching server from command line, always launch as background process since it will be blocking terminal for ever, also before launching try to close previous instance to avoid port conflicts by running `pkill -f target`
+
+- review current repo state against tasks listed in @/tasks.md, validate all comeplted tasks are completed, for all remaining tasks completed them and check off tasks as they are completed, when launching server from command line, always launch as background process since it will be blocking terminal for ever, also before launching try to close previous instance to avoid port conflicts by running `pkill -f target`
 
 # Kilo Code Memory Bank Setup
 ```bash

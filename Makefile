@@ -43,19 +43,19 @@ benchmark: build
 # Additional benchmark targets
 benchmark-light: build
 	@echo "Running light benchmark..."
-	@$(TARGET_DIR)/benchmark --connections 10 --duration 30s --service echo
+	@$(TARGET_DIR)/benchmark --connections 10 --duration 5s --service echo
 
 benchmark-medium: build
 	@echo "Running medium benchmark..."
-	@$(TARGET_DIR)/benchmark --connections 50 --duration 60s --service both
+	@$(TARGET_DIR)/benchmark --connections 50 --duration 10s --service both
 
 benchmark-heavy: build
 	@echo "Running heavy benchmark..."
-	@$(TARGET_DIR)/benchmark --connections 100 --duration 120s --service both
+	@$(TARGET_DIR)/benchmark --connections 100 --duration 15s --service both
 
 benchmark-tcp: build
 	@echo "Running TCP transport benchmark..."
-	@$(TARGET_DIR)/benchmark --transport tcp --duration 60s --connections 50
+	@$(TARGET_DIR)/benchmark --transport tcp --duration 5s --connections 50
 
 benchmark-vsock: build
 	@echo "Running VSOCK transport benchmark..."

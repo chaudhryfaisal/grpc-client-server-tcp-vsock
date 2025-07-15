@@ -46,7 +46,7 @@ impl EchoService for EchoServiceImpl {
         );
 
         // Log the request details
-        info!(
+        debug!(
             "Echo request processed: payload='{}', latency={}ms",
             req.payload,
             response_timestamp - req.timestamp
@@ -106,7 +106,7 @@ impl CryptoService for CryptoServiceImpl {
             }
         };
 
-        info!(
+        debug!(
             "Sign request processed: key_type={:?}, algorithm={:?}, signature_len={}, latency={}ms",
             req.key_type,
             req.algorithm,
@@ -138,20 +138,16 @@ impl CryptoService for CryptoServiceImpl {
         );
 
         // Get public key based on key type
-        let public_key_der = match KeyType::try_from(req.key_type) {
-            Some(KeyType::Rsa) => {
+        let key_type = KeyType::try_from(req.key_type).map_err(|_| Status::invalid_argument("Invalid key type"))?;
+        let public_key_der = match key_type {
+            KeyType::Rsa => {
                 self.crypto_keys.get_rsa_public_key_der()
                     .map_err(|e| Status::internal(format!("RSA public key retrieval failed: {}", e)))?
             }
-            Some(KeyType::Ecc) => {
+            KeyType::Ecc => {
                 // Default to P-256 for ECC requests
                 self.crypto_keys.get_ecc_p256_public_key_der()
                     .map_err(|e| Status::internal(format!("ECC public key retrieval failed: {}", e)))?
-            }
-            _ => {
-                return Err(Status::invalid_argument(
-                    format!("Unsupported key type: {:?}", req.key_type)
-                ));
             }
         };
 

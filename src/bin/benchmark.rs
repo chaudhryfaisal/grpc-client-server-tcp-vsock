@@ -14,7 +14,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
+use tokio::time::sleep;
 use tonic::transport::Channel;
+use clap::{Arg, Command};
 
 #[derive(Clone)]
 struct BenchmarkMetrics {
@@ -89,6 +91,170 @@ impl BenchmarkMetrics {
     }
 }
 
+#[derive(Debug, Clone)]
+struct BenchmarkConfig {
+    connections: usize,
+    threads: usize,
+    requests: usize,
+    rate_limit: Option<u64>,
+    transport: String,
+    service: String,
+    duration: Option<u64>,
+    server_addr: String,
+}
+
+impl BenchmarkConfig {
+    fn from_args_and_env() -> Result<Self, Box<dyn std::error::Error>> {
+        let matches = Command::new("benchmark")
+            .version("1.0")
+            .about("gRPC benchmark tool supporting TCP and VSOCK transports")
+            .arg(
+                Arg::new("connections")
+                    .long("connections")
+                    .value_name("NUM")
+                    .help("Number of concurrent connections")
+                    .value_parser(clap::value_parser!(usize))
+            )
+            .arg(
+                Arg::new("threads")
+                    .long("threads")
+                    .value_name("NUM")
+                    .help("Number of worker threads")
+                    .value_parser(clap::value_parser!(usize))
+            )
+            .arg(
+                Arg::new("requests")
+                    .long("requests")
+                    .value_name("NUM")
+                    .help("Total number of requests to send")
+                    .value_parser(clap::value_parser!(usize))
+            )
+            .arg(
+                Arg::new("rate")
+                    .long("rate")
+                    .value_name("RPS")
+                    .help("Requests per second limit (optional)")
+                    .value_parser(clap::value_parser!(u64))
+            )
+            .arg(
+                Arg::new("transport")
+                    .long("transport")
+                    .value_name("TYPE")
+                    .help("Transport type: tcp or vsock")
+                    .value_parser(["tcp", "vsock"])
+            )
+            .arg(
+                Arg::new("service")
+                    .long("service")
+                    .value_name("TYPE")
+                    .help("Service type: echo, crypto, or both")
+                    .value_parser(["echo", "crypto", "both"])
+            )
+            .arg(
+                Arg::new("duration")
+                    .long("duration")
+                    .value_name("DURATION")
+                    .help("Test duration (e.g., 30s, 2m, 1h)")
+            )
+            .arg(
+                Arg::new("server")
+                    .long("server")
+                    .value_name("ADDR")
+                    .help("Server address (overrides SERVER_ADDR env var)")
+            )
+            .get_matches();
+
+        // CLI arguments take precedence over environment variables
+        let connections = matches.get_one::<usize>("connections")
+            .copied()
+            .or_else(|| env::var("CONCURRENT_REQUESTS").ok().and_then(|s| s.parse().ok()))
+            .or_else(|| env::var("CONNECTIONS").ok().and_then(|s| s.parse().ok()))
+            .unwrap_or(10);
+        
+        let threads = matches.get_one::<usize>("threads")
+            .copied()
+            .or_else(|| env::var("THREADS").ok().and_then(|s| s.parse().ok()))
+            .unwrap_or(4);
+        
+        let requests = matches.get_one::<usize>("requests")
+            .copied()
+            .or_else(|| env::var("TOTAL_REQUESTS").ok().and_then(|s| s.parse().ok()))
+            .or_else(|| env::var("REQUESTS").ok().and_then(|s| s.parse().ok()))
+            .unwrap_or(1000);
+        
+        let rate_limit = matches.get_one::<u64>("rate")
+            .copied()
+            .or_else(|| env::var("RATE_LIMIT").ok().and_then(|s| s.parse().ok()));
+        
+        let transport = matches.get_one::<String>("transport")
+            .cloned()
+            .or_else(|| env::var("TRANSPORT").ok())
+            .unwrap_or_else(|| "tcp".to_string());
+        
+        let service = matches.get_one::<String>("service")
+            .cloned()
+            .or_else(|| env::var("BENCHMARK_TYPE").ok())
+            .or_else(|| env::var("SERVICE").ok())
+            .unwrap_or_else(|| "echo".to_string());
+        
+        // Parse duration string (e.g., "30s", "2m", "1h")
+        let duration = matches.get_one::<String>("duration")
+            .and_then(|s| parse_duration(s))
+            .or_else(|| env::var("DURATION").ok().and_then(|s| s.parse().ok()));
+
+        let server_addr = matches.get_one::<String>("server")
+            .cloned()
+            .or_else(|| env::var("SERVER_ADDR").ok())
+            .unwrap_or_else(|| DEFAULT_SERVER_ADDR.to_string());
+
+        // Validate argument combinations
+        if !["tcp", "vsock"].contains(&transport.as_str()) {
+            return Err(format!("Invalid transport '{}'. Must be 'tcp' or 'vsock'", transport).into());
+        }
+        
+        if !["echo", "crypto", "both"].contains(&service.as_str()) {
+            return Err(format!("Invalid service '{}'. Must be 'echo', 'crypto', or 'both'", service).into());
+        }
+        
+        if connections == 0 {
+            return Err("Number of connections must be greater than 0".into());
+        }
+        
+        if threads == 0 {
+            return Err("Number of threads must be greater than 0".into());
+        }
+        
+        if requests == 0 && duration.is_none() {
+            return Err("Either requests count must be greater than 0 or duration must be specified".into());
+        }
+
+        Ok(BenchmarkConfig {
+            connections,
+            threads,
+            requests,
+            rate_limit,
+            transport,
+            service,
+            duration,
+            server_addr,
+        })
+    }
+}
+
+fn parse_duration(duration_str: &str) -> Option<u64> {
+    let duration_str = duration_str.trim();
+    
+    if duration_str.ends_with('s') {
+        duration_str[..duration_str.len()-1].parse().ok()
+    } else if duration_str.ends_with('m') {
+        duration_str[..duration_str.len()-1].parse::<u64>().ok().map(|m| m * 60)
+    } else if duration_str.ends_with('h') {
+        duration_str[..duration_str.len()-1].parse::<u64>().ok().map(|h| h * 3600)
+    } else {
+        duration_str.parse().ok()
+    }
+}
+
 async fn create_optimized_channel(addr: &str) -> AppResult<Channel> {
     let channel = Channel::from_shared(format!("http://{}", addr))?
         .tcp_keepalive(Some(Duration::from_secs(30)))
@@ -108,6 +274,8 @@ async fn benchmark_echo_service(
     concurrent_requests: usize,
     total_requests: usize,
     metrics: BenchmarkMetrics,
+    rate_limit: Option<u64>,
+    duration: Option<u64>,
 ) -> AppResult<()> {
     info!("Starting echo service benchmark: {} concurrent, {} total requests", 
           concurrent_requests, total_requests);
@@ -115,10 +283,23 @@ async fn benchmark_echo_service(
     let semaphore = Arc::new(Semaphore::new(concurrent_requests));
     let mut tasks = Vec::new();
     
-    for i in 0..total_requests {
+    let end_time = duration.map(|d| Instant::now() + Duration::from_secs(d));
+    let mut request_count = 0;
+    
+    loop {
+        // Check if we should stop based on duration or request count
+        if let Some(end) = end_time {
+            if Instant::now() >= end {
+                break;
+            }
+        } else if request_count >= total_requests {
+            break;
+        }
+        
         let semaphore = semaphore.clone();
         let metrics = metrics.clone();
         let addr = addr.to_string();
+        let i = request_count;
         
         let task = tokio::spawn(async move {
             let _permit = semaphore.acquire().await.unwrap();
@@ -150,6 +331,19 @@ async fn benchmark_echo_service(
         });
         
         tasks.push(task);
+        
+        // Apply rate limiting if specified
+        if let Some(rps) = rate_limit {
+            let interval = Duration::from_nanos(1_000_000_000 / rps);
+            sleep(interval).await;
+        }
+        
+        request_count += 1;
+        
+        // For duration-based tests, don't limit by total_requests
+        if duration.is_none() && request_count >= total_requests {
+            break;
+        }
     }
     
     // Wait for all tasks to complete
@@ -165,6 +359,8 @@ async fn benchmark_crypto_service(
     concurrent_requests: usize,
     total_requests: usize,
     metrics: BenchmarkMetrics,
+    rate_limit: Option<u64>,
+    duration: Option<u64>,
 ) -> AppResult<()> {
     info!("Starting crypto service benchmark: {} concurrent, {} total requests", 
           concurrent_requests, total_requests);
@@ -172,10 +368,23 @@ async fn benchmark_crypto_service(
     let semaphore = Arc::new(Semaphore::new(concurrent_requests));
     let mut tasks = Vec::new();
     
-    for i in 0..total_requests {
+    let end_time = duration.map(|d| Instant::now() + Duration::from_secs(d));
+    let mut request_count = 0;
+    
+    loop {
+        // Check if we should stop based on duration or request count
+        if let Some(end) = end_time {
+            if Instant::now() >= end {
+                break;
+            }
+        } else if request_count >= total_requests {
+            break;
+        }
+        
         let semaphore = semaphore.clone();
         let metrics = metrics.clone();
         let addr = addr.to_string();
+        let i = request_count;
         
         let task = tokio::spawn(async move {
             let _permit = semaphore.acquire().await.unwrap();
@@ -209,6 +418,19 @@ async fn benchmark_crypto_service(
         });
         
         tasks.push(task);
+        
+        // Apply rate limiting if specified
+        if let Some(rps) = rate_limit {
+            let interval = Duration::from_nanos(1_000_000_000 / rps);
+            sleep(interval).await;
+        }
+        
+        request_count += 1;
+        
+        // For duration-based tests, don't limit by total_requests
+        if duration.is_none() && request_count >= total_requests {
+            break;
+        }
     }
     
     // Wait for all tasks to complete
@@ -225,28 +447,34 @@ async fn main() -> AppResult<()> {
     env::set_var("RUST_LOG", "info");
     env_logger::init();
 
-    // Parse configuration from environment variables
-    let server_addr = env::var("SERVER_ADDR")
-        .unwrap_or_else(|_| DEFAULT_SERVER_ADDR.to_string());
-    
-    let concurrent_requests: usize = env::var("CONCURRENT_REQUESTS")
-        .unwrap_or_else(|_| "10".to_string())
-        .parse()
-        .unwrap_or(10);
-    
-    let total_requests: usize = env::var("TOTAL_REQUESTS")
-        .unwrap_or_else(|_| "1000".to_string())
-        .parse()
-        .unwrap_or(1000);
-    
-    let benchmark_type = env::var("BENCHMARK_TYPE")
-        .unwrap_or_else(|_| "both".to_string());
+    // Parse configuration from CLI args and environment variables
+    let config = match BenchmarkConfig::from_args_and_env() {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("Configuration error: {}", e);
+            std::process::exit(1);
+        }
+    };
 
     info!("Starting gRPC performance benchmark");
-    info!("Server: {}", server_addr);
-    info!("Concurrent requests: {}", concurrent_requests);
-    info!("Total requests: {}", total_requests);
-    info!("Benchmark type: {}", benchmark_type);
+    info!("Server: {}", config.server_addr);
+    info!("Concurrent connections: {}", config.connections);
+    info!("Worker threads: {}", config.threads);
+    info!("Total requests: {}", config.requests);
+    if let Some(rate) = config.rate_limit {
+        info!("Rate limit: {} requests/second", rate);
+    }
+    info!("Transport: {}", config.transport);
+    info!("Service: {}", config.service);
+    if let Some(duration) = config.duration {
+        info!("Duration: {} seconds", duration);
+    }
+
+    // Use the existing variable names for compatibility with existing benchmark functions
+    let server_addr = config.server_addr;
+    let concurrent_requests = config.connections;
+    let total_requests = config.requests;
+    let benchmark_type = config.service;
 
     let overall_start = Instant::now();
 
@@ -255,7 +483,7 @@ async fn main() -> AppResult<()> {
             let metrics = BenchmarkMetrics::new();
             let start_time = Instant::now();
             
-            benchmark_echo_service(&server_addr, concurrent_requests, total_requests, metrics.clone()).await?;
+            benchmark_echo_service(&server_addr, concurrent_requests, total_requests, metrics.clone(), config.rate_limit, config.duration).await?;
             
             let duration = start_time.elapsed();
             let (total, successful, failed, avg_latency, min_latency, max_latency) = metrics.get_stats();
@@ -275,7 +503,7 @@ async fn main() -> AppResult<()> {
             let metrics = BenchmarkMetrics::new();
             let start_time = Instant::now();
             
-            benchmark_crypto_service(&server_addr, concurrent_requests, total_requests, metrics.clone()).await?;
+            benchmark_crypto_service(&server_addr, concurrent_requests, total_requests, metrics.clone(), config.rate_limit, config.duration).await?;
             
             let duration = start_time.elapsed();
             let (total, successful, failed, avg_latency, min_latency, max_latency) = metrics.get_stats();
@@ -296,7 +524,7 @@ async fn main() -> AppResult<()> {
             let echo_metrics = BenchmarkMetrics::new();
             let echo_start = Instant::now();
             
-            benchmark_echo_service(&server_addr, concurrent_requests, total_requests, echo_metrics.clone()).await?;
+            benchmark_echo_service(&server_addr, concurrent_requests, total_requests, echo_metrics.clone(), config.rate_limit, config.duration).await?;
             
             let echo_duration = echo_start.elapsed();
             let (echo_total, echo_successful, echo_failed, echo_avg_latency, echo_min_latency, echo_max_latency) = echo_metrics.get_stats();
@@ -305,7 +533,7 @@ async fn main() -> AppResult<()> {
             let crypto_metrics = BenchmarkMetrics::new();
             let crypto_start = Instant::now();
             
-            benchmark_crypto_service(&server_addr, concurrent_requests, total_requests, crypto_metrics.clone()).await?;
+            benchmark_crypto_service(&server_addr, concurrent_requests, total_requests, crypto_metrics.clone(), config.rate_limit, config.duration).await?;
             
             let crypto_duration = crypto_start.elapsed();
             let (crypto_total, crypto_successful, crypto_failed, crypto_avg_latency, crypto_min_latency, crypto_max_latency) = crypto_metrics.get_stats();
