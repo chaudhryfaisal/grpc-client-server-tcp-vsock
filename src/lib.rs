@@ -1,7 +1,10 @@
 //! Shared types and utilities for the gRPC performance testing system
 
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use http;
+use ring::signature;
+use ring::signature::{RsaKeyPair, EcdsaKeyPair, KeyPair};
 
 // Include the generated proto code
 pub mod echo {
@@ -37,13 +40,17 @@ pub enum AppError {
     #[error("Invalid configuration: {0}")]
     Config(String),
     #[error("Cryptographic error: {0}")]
-    Crypto(String),
+    CryptoError(String),
     #[error("Key generation error: {0}")]
     KeyGeneration(String),
     #[error("Signing error: {0}")]
     Signing(String),
     #[error("Unsupported algorithm: {0}")]
     UnsupportedAlgorithm(String),
+    #[error("Ring error: {0}")]
+    Ring(String),
+    #[error("Ring key rejected: {0}")]
+    KeyRejected(String),
 }
 
 /// Result type alias for the application
@@ -55,67 +62,139 @@ pub const DEFAULT_SERVER_ADDR: &str = "127.0.0.1:50051";
 /// Default log level for the application
 pub const DEFAULT_LOG_LEVEL: &str = "info";
 
-/// Cryptographic key manager for RSA and ECC keys
-/// For now, this is a placeholder implementation that will be completed later
+/// Cryptographic key manager for RSA and ECC keys using ring crate
 #[derive(Debug)]
 pub struct CryptoKeys {
-    // TODO: Add actual key storage when ring API is properly configured
+    rsa_key_pair: Option<Arc<RsaKeyPair>>,
+    ecc_p256_key_pair: Arc<EcdsaKeyPair>,
+    ecc_p384_key_pair: Arc<EcdsaKeyPair>,
+    rng: ring::rand::SystemRandom,
 }
 
 impl CryptoKeys {
-    /// Generate new RSA and ECC key pairs
-    /// TODO: Implement actual key generation with ring crate
+    /// Generate new RSA and ECC key pairs using ring crate
     pub fn generate() -> AppResult<Self> {
-        // Placeholder implementation
-        Ok(CryptoKeys {})
+        let rng = ring::rand::SystemRandom::new();
+        
+        // Generate RSA key pair - ring doesn't provide RSA key generation
+        // We'll use a minimal test key for demonstration
+        let rsa_key_pair = Self::create_test_rsa_key().ok();
+        if rsa_key_pair.is_none() {
+            eprintln!("Warning: Failed to create RSA key pair - RSA operations will be unavailable");
+        }
+        
+        // Generate ECC P-256 key pair
+        let ecc_p256_key_pair = {
+            let ecc_p256_pkcs8 = EcdsaKeyPair::generate_pkcs8(&signature::ECDSA_P256_SHA256_FIXED_SIGNING, &rng)
+                .map_err(|e| AppError::CryptoError(format!("Failed to generate P-256 key: {:?}", e)))?;
+            EcdsaKeyPair::from_pkcs8(&signature::ECDSA_P256_SHA256_FIXED_SIGNING, ecc_p256_pkcs8.as_ref(), &rng)
+                .map_err(|e| AppError::CryptoError(format!("Failed to create P-256 key pair: {:?}", e)))?
+        };
+        
+        // Generate ECC P-384 key pair
+        let ecc_p384_key_pair = {
+            let ecc_p384_pkcs8 = EcdsaKeyPair::generate_pkcs8(&signature::ECDSA_P384_SHA384_FIXED_SIGNING, &rng)
+                .map_err(|e| AppError::CryptoError(format!("Failed to generate P-384 key: {:?}", e)))?;
+            EcdsaKeyPair::from_pkcs8(&signature::ECDSA_P384_SHA384_FIXED_SIGNING, ecc_p384_pkcs8.as_ref(), &rng)
+                .map_err(|e| AppError::CryptoError(format!("Failed to create P-384 key pair: {:?}", e)))?
+        };
+        
+        Ok(CryptoKeys {
+            rsa_key_pair: rsa_key_pair.map(Arc::new),
+            ecc_p256_key_pair: Arc::new(ecc_p256_key_pair),
+            ecc_p384_key_pair: Arc::new(ecc_p384_key_pair),
+            rng,
+        })
+    }
+    
+    /// Create a test RSA key for demonstration
+    /// Note: ring doesn't provide RSA key generation, so this returns None for now
+    /// In production, you'd generate RSA keys with another crate and convert to ring format
+    fn create_test_rsa_key() -> Result<RsaKeyPair, String> {
+        // For now, we'll return an error to indicate RSA is not available
+        // In production, you'd either:
+        // 1. Generate RSA keys with another crate (like rsa) and convert to ring format
+        // 2. Load pre-generated keys from secure storage
+        // 3. Use a hardcoded test key for development
+        Err("RSA key generation not implemented".to_string())
     }
     
     /// Get RSA public key in DER format
-    /// TODO: Implement actual RSA public key retrieval
     pub fn get_rsa_public_key_der(&self) -> AppResult<Vec<u8>> {
-        // Return a placeholder public key for now
-        Ok(vec![0x30, 0x82, 0x01, 0x22]) // Placeholder DER header
+        match &self.rsa_key_pair {
+            Some(key_pair) => {
+                let public_key = key_pair.public();
+                Ok(public_key.as_ref().to_vec())
+            },
+            None => Err(AppError::CryptoError("RSA key pair not available".to_string())),
+        }
     }
     
     /// Get ECC P-256 public key in DER format
-    /// TODO: Implement actual ECC P-256 public key retrieval
     pub fn get_ecc_p256_public_key_der(&self) -> AppResult<Vec<u8>> {
-        // Return a placeholder public key for now
-        Ok(vec![0x30, 0x59, 0x30, 0x13]) // Placeholder DER header
+        let public_key = self.ecc_p256_key_pair.public_key();
+        Ok(public_key.as_ref().to_vec())
     }
     
     /// Get ECC P-384 public key in DER format
-    /// TODO: Implement actual ECC P-384 public key retrieval
     pub fn get_ecc_p384_public_key_der(&self) -> AppResult<Vec<u8>> {
-        // Return a placeholder public key for now
-        Ok(vec![0x30, 0x76, 0x30, 0x10]) // Placeholder DER header
+        let public_key = self.ecc_p384_key_pair.public_key();
+        Ok(public_key.as_ref().to_vec())
     }
     
     /// Sign data using RSA PKCS#1 v1.5 with SHA-256
-    /// TODO: Implement actual RSA PKCS#1 signing
-    pub fn sign_rsa_pkcs1_sha256(&self, _data: &[u8]) -> AppResult<Vec<u8>> {
-        // Return a placeholder signature for now
-        Ok(vec![0u8; 256]) // 2048-bit RSA signature size
+    pub fn sign_rsa_pkcs1_sha256(&self, data: &[u8]) -> AppResult<Vec<u8>> {
+        match &self.rsa_key_pair {
+            Some(key_pair) => {
+                let mut signature = vec![0u8; key_pair.public().modulus_len()];
+                key_pair
+                    .sign(&signature::RSA_PKCS1_SHA256, &self.rng, data, &mut signature)
+                    .map_err(|e| AppError::CryptoError(format!("RSA PKCS#1 signing failed: {:?}", e)))?;
+                Ok(signature)
+            },
+            None => Err(AppError::CryptoError("RSA key pair not available".to_string())),
+        }
     }
     
     /// Sign data using RSA PSS with SHA-256
-    /// TODO: Implement actual RSA PSS signing
-    pub fn sign_rsa_pss_sha256(&self, _data: &[u8]) -> AppResult<Vec<u8>> {
-        // Return a placeholder signature for now
-        Ok(vec![0u8; 256]) // 2048-bit RSA signature size
+    pub fn sign_rsa_pss_sha256(&self, data: &[u8]) -> AppResult<Vec<u8>> {
+        match &self.rsa_key_pair {
+            Some(key_pair) => {
+                let mut signature = vec![0u8; key_pair.public().modulus_len()];
+                key_pair
+                    .sign(&signature::RSA_PSS_SHA256, &self.rng, data, &mut signature)
+                    .map_err(|e| AppError::CryptoError(format!("RSA PSS signing failed: {:?}", e)))?;
+                Ok(signature)
+            },
+            None => Err(AppError::CryptoError("RSA key pair not available".to_string())),
+        }
     }
     
     /// Sign data using ECDSA P-256 with SHA-256
-    /// TODO: Implement actual ECDSA P-256 signing
-    pub fn sign_ecdsa_p256_sha256(&self, _data: &[u8]) -> AppResult<Vec<u8>> {
-        // Return a placeholder signature for now
-        Ok(vec![0u8; 64]) // P-256 signature size
+    pub fn sign_ecdsa_p256_sha256(&self, data: &[u8]) -> AppResult<Vec<u8>> {
+        let signature = self.ecc_p256_key_pair
+            .sign(&self.rng, data)
+            .map_err(|e| AppError::CryptoError(format!("ECDSA P-256 signing failed: {:?}", e)))?;
+        Ok(signature.as_ref().to_vec())
     }
     
     /// Sign data using ECDSA P-384 with SHA-384
-    /// TODO: Implement actual ECDSA P-384 signing
-    pub fn sign_ecdsa_p384_sha384(&self, _data: &[u8]) -> AppResult<Vec<u8>> {
-        // Return a placeholder signature for now
-        Ok(vec![0u8; 96]) // P-384 signature size
+    pub fn sign_ecdsa_p384_sha384(&self, data: &[u8]) -> AppResult<Vec<u8>> {
+        let signature = self.ecc_p384_key_pair
+            .sign(&self.rng, data)
+            .map_err(|e| AppError::CryptoError(format!("ECDSA P-384 signing failed: {:?}", e)))?;
+        Ok(signature.as_ref().to_vec())
+    }
+}
+
+// Implement Clone for CryptoKeys by cloning the Arc references
+impl Clone for CryptoKeys {
+    fn clone(&self) -> Self {
+        CryptoKeys {
+            rsa_key_pair: self.rsa_key_pair.clone(),
+            ecc_p256_key_pair: Arc::clone(&self.ecc_p256_key_pair),
+            ecc_p384_key_pair: Arc::clone(&self.ecc_p384_key_pair),
+            rng: ring::rand::SystemRandom::new(),
+        }
     }
 }

@@ -461,6 +461,7 @@ dependencies = [
  "tonic-build",
  "tower",
  "tower-service",
+ "untrusted",
  "vsock 0.4.0",
 ]
 

@@ -1,6 +1,6 @@
 # Makefile for the grpc-performance-rs project
 
-.PHONY: all build test server client benchmark benchmark-light benchmark-medium benchmark-heavy benchmark-tcp benchmark-vsock benchmark-latency benchmark-throughput clean help setup
+.PHONY: all build test server stop-server client benchmark benchmark-light benchmark-medium benchmark-heavy benchmark-tcp benchmark-vsock benchmark-latency benchmark-throughput clean help setup
 
 # Variables
 TARGET_DIR := target/release
@@ -22,11 +22,20 @@ test:
 	@echo "Running integration tests..."
 	@cargo test --release
 
-# Start the gRPC server
+# Start the gRPC server in background
 # Depends on 'build' to ensure the binary is up-to-date
 server: build
-	@echo "Starting gRPC server..."
-	@$(TARGET_DIR)/server
+	@echo "Stopping any existing server processes..."
+	@pkill -f "$(TARGET_DIR)/server" 2>/dev/null || true
+	@echo "Starting gRPC server in background..."
+	@$(TARGET_DIR)/server &
+	@sleep 2
+	@echo "Server is running in background (use 'make stop-server' to stop)"
+
+# Stop the gRPC server
+stop-server:
+	@echo "Stopping gRPC server..."
+	@pkill -f "$(TARGET_DIR)/server" 2>/dev/null || echo "No server process found"
 
 # Run the sample client
 # Depends on 'build' to ensure the binary is up-to-date
@@ -84,9 +93,10 @@ help:
 	@echo "  clean     Clean build artifacts"
 	@echo ""
 	@echo "Runtime Targets:"
-	@echo "  server    Start the gRPC server"
-	@echo "  client    Run the sample client"
-	@echo "  test      Run integration tests"
+	@echo "  server      Start the gRPC server in background"
+	@echo "  stop-server Stop the gRPC server"
+	@echo "  client      Run the sample client"
+	@echo "  test        Run integration tests"
 	@echo ""
 	@echo "Benchmark Targets:"
 	@echo "  benchmark           Execute default performance benchmark"

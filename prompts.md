@@ -33,6 +33,8 @@ generate prd for maximize performance and minimal latency grpc client and server
 
 - review current repo state against tasks listed in @/tasks.md, validate all comeplted tasks are completed, for all remaining tasks completed them and check off tasks as they are completed, when launching server from command line, always launch as background process since it will be blocking terminal for ever, also before launching try to close previous instance to avoid port conflicts by running `pkill -f target`
 
+- ensure all tasks from @/tasks.md are completed with no TODOs, un implemented or mock functionality, validate in the code instead of just looking at checked todo item, update tasks.md if needed, when launching server from command line, always launch as background process since it will be blocking terminal for ever, also before launching try to close previous instance to avoid port conflicts by running `pkill -f target`
+
 # Kilo Code Memory Bank Setup
 ```bash
 # https://kilocode.ai/docs/advanced-usage/memory-bank
