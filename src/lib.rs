@@ -38,6 +38,8 @@ pub enum AppError {
     Io(#[from] std::io::Error),
     #[error("Invalid URI: {0}")]
     InvalidUri(#[from] http::uri::InvalidUri),
+    #[error("Transport layer error: {0}")]
+    TransportLayer(#[from] crate::transport::TransportError),
     #[error("Invalid configuration: {0}")]
     Config(String),
     #[error("Cryptographic error: {0}")]

@@ -8,10 +8,14 @@ use grpc_performance_rs::{
         KeyType, SigningAlgorithm
     },
     current_timestamp_millis, AppResult, DEFAULT_SERVER_ADDR, DEFAULT_LOG_LEVEL, CryptoKeys,
+    transport::{TransportConfig, TransportFactory},
 };
 use log::{info, error, debug};
 use std::env;
+use std::str::FromStr;
 use tonic::{transport::Server, Request, Response, Status};
+use tower::Service;
+use hyper::service::service_fn;
 
 /// Echo service implementation
 #[derive(Debug, Default)]
@@ -176,11 +180,12 @@ fn main() -> AppResult<()> {
     env_logger::init();
 
     // Parse server address from environment or use default
-    let addr = env::var("SERVER_ADDR")
-        .unwrap_or_else(|_| DEFAULT_SERVER_ADDR.to_string())
-        .parse()
+    let addr_str = env::var("SERVER_ADDR")
+        .unwrap_or_else(|_| DEFAULT_SERVER_ADDR.to_string());
+    
+    let transport_config = TransportConfig::from_str(&addr_str)
         .map_err(|e| {
-            error!("Invalid server address: {}", e);
+            error!("Invalid server address '{}': {}", addr_str, e);
             std::io::Error::new(std::io::ErrorKind::InvalidInput, e)
         })?;
 
@@ -190,7 +195,10 @@ fn main() -> AppResult<()> {
         .and_then(|s| s.parse().ok())
         .unwrap_or_else(|| num_cpus::get());
 
-    info!("Starting gRPC server on {} with {} worker threads", addr, worker_threads);
+    info!("Starting gRPC server on {} ({}) with {} worker threads",
+          transport_config,
+          if transport_config.is_tcp() { "TCP" } else { "VSOCK" },
+          worker_threads);
 
     // Optimize tokio runtime for better multi-threading performance
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -217,8 +225,8 @@ fn main() -> AppResult<()> {
         
         info!("Crypto keys generated successfully");
 
-        // Configure server with optimizations
-        let mut server_builder = Server::builder()
+        // Create the gRPC router with services
+        let router = Server::builder()
             .tcp_keepalive(Some(std::time::Duration::from_secs(30)))
             .tcp_nodelay(true)
             .http2_keepalive_interval(Some(std::time::Duration::from_secs(30)))
@@ -226,23 +234,61 @@ fn main() -> AppResult<()> {
             .max_concurrent_streams(Some(1000))
             .initial_stream_window_size(Some(1024 * 1024)) // 1MB
             .initial_connection_window_size(Some(1024 * 1024)) // 1MB
-            .max_frame_size(Some(16384)); // 16KB
-
-        // Build and start the server
-        let server_result = server_builder
+            .max_frame_size(Some(16384)) // 16KB
             .add_service(EchoServiceServer::new(echo_service))
             .add_service(CryptoServiceServer::new(crypto_service))
-            .serve(addr)
-            .await;
+            .into_router();
 
-        match server_result {
-            Ok(_) => {
-                info!("Server shutdown gracefully");
-                Ok(())
-            }
-            Err(e) => {
-                error!("Server error: {}", e);
-                Err(e.into())
+        // Bind to the transport
+        let mut listener = TransportFactory::bind(&transport_config).await
+            .map_err(|e| {
+                error!("Failed to bind to {}: {}", transport_config, e);
+                std::io::Error::new(std::io::ErrorKind::AddrInUse, e)
+            })?;
+
+        let local_addr = listener.local_addr()
+            .map_err(|e| {
+                error!("Failed to get local address: {}", e);
+                std::io::Error::new(std::io::ErrorKind::Other, e)
+            })?;
+
+        info!("gRPC server listening on {}", local_addr);
+
+        // Custom server loop to accept connections
+        loop {
+            match listener.accept().await {
+                Ok(connection) => {
+                    let remote_addr = connection.remote_addr()
+                        .unwrap_or_else(|_| "unknown".to_string());
+                    
+                    debug!("Accepted connection from {}", remote_addr);
+                    
+                    // Clone the router for this connection
+                    let router_clone = router.clone();
+                    
+                    // Spawn a task to handle this connection
+                    tokio::spawn(async move {
+                        // Create a hyper service from the connection
+                        let service = service_fn(move |req| {
+                            router_clone.clone().call(req)
+                        });
+                        
+                        // Serve HTTP/2 over this connection using hyper 0.14 API
+                        if let Err(e) = hyper::server::conn::Http::new()
+                            .http2_only(true)
+                            .serve_connection(connection, service)
+                            .await
+                        {
+                            debug!("Connection from {} closed with error: {}", remote_addr, e);
+                        } else {
+                            debug!("Connection from {} closed gracefully", remote_addr);
+                        }
+                    });
+                }
+                Err(e) => {
+                    error!("Failed to accept connection: {}", e);
+                    // Continue accepting other connections
+                }
             }
         }
     })

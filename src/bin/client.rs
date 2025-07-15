@@ -6,11 +6,13 @@ use grpc_performance_rs::{
         crypto_service_client::CryptoServiceClient,
         SignRequest, PublicKeyRequest, KeyType, SigningAlgorithm
     },
-    current_timestamp_millis, AppResult, DEFAULT_SERVER_ADDR, DEFAULT_LOG_LEVEL,
+    current_timestamp_millis, AppResult, AppError, DEFAULT_SERVER_ADDR, DEFAULT_LOG_LEVEL,
+    transport::{TransportConfig, TransportFactory, Connection, TransportError},
 };
 use log::{info, error, debug};
 use std::env;
-use tonic::transport::Channel;
+use std::str::FromStr;
+use tonic::transport::{Channel, Endpoint, Uri};
 
 /// Create a sample echo request
 fn create_echo_request(payload: &str) -> EchoRequest {
@@ -20,25 +22,69 @@ fn create_echo_request(payload: &str) -> EchoRequest {
     }
 }
 
+/// Create a custom channel using our transport abstraction
+async fn create_transport_channel(transport_config: &TransportConfig) -> AppResult<Channel> {
+    info!("Creating transport channel for {}", transport_config);
+    
+    match transport_config {
+        TransportConfig::Tcp(addr) => {
+            // For TCP, use tonic's built-in channel creation
+            debug!("Creating TCP channel to {}", addr);
+            let endpoint = Channel::from_shared(format!("http://{}", addr))
+                .map_err(|e| AppError::TransportLayer(TransportError::InvalidAddress(format!("Invalid TCP address: {}", e))))?;
+            
+            let channel = endpoint
+                .connect()
+                .await
+                .map_err(|e| AppError::TransportLayer(TransportError::ConnectionFailed(format!("Failed to connect via TCP: {}", e))))?;
+            
+            Ok(channel)
+        }
+        TransportConfig::Vsock { cid, port } => {
+            // For VSOCK, use our transport factory with a custom connector
+            debug!("Creating VSOCK channel to CID {} port {}", cid, port);
+            
+            let config = transport_config.clone();
+            let connector = tower::service_fn(move |_: Uri| {
+                let config = config.clone();
+                async move {
+                    let connection = TransportFactory::connect(&config).await
+                        .map_err(|e| std::io::Error::new(std::io::ErrorKind::ConnectionRefused, e.to_string()))?;
+                    
+                    match connection {
+                        Connection::Vsock(stream) => Ok(stream),
+                        Connection::Tcp(_) => Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "Expected VSOCK connection but got TCP"
+                        )),
+                    }
+                }
+            });
+            
+            let endpoint = Endpoint::from_static("http://[::]:50051");
+            let channel = endpoint
+                .connect_with_connector(connector)
+                .await
+                .map_err(|e| AppError::TransportLayer(TransportError::ConnectionFailed(format!("Failed to connect via VSOCK: {}", e))))?;
+            
+            Ok(channel)
+        }
+    }
+}
+
 /// Connect to the gRPC server for echo service
-async fn connect_to_echo_server(addr: &str) -> AppResult<EchoServiceClient<Channel>> {
-    info!("Connecting to gRPC echo service at {}", addr);
+async fn connect_to_echo_server(transport_config: &TransportConfig) -> AppResult<EchoServiceClient<Channel>> {
+    info!("Connecting to gRPC echo service at {}", transport_config);
     
-    let channel = Channel::from_shared(format!("http://{}", addr))?
-        .connect()
-        .await?;
-    
+    let channel = create_transport_channel(transport_config).await?;
     Ok(EchoServiceClient::new(channel))
 }
 
 /// Connect to the gRPC server for crypto service
-async fn connect_to_crypto_server(addr: &str) -> AppResult<CryptoServiceClient<Channel>> {
-    info!("Connecting to gRPC crypto service at {}", addr);
+async fn connect_to_crypto_server(transport_config: &TransportConfig) -> AppResult<CryptoServiceClient<Channel>> {
+    info!("Connecting to gRPC crypto service at {}", transport_config);
     
-    let channel = Channel::from_shared(format!("http://{}", addr))?
-        .connect()
-        .await?;
-    
+    let channel = create_transport_channel(transport_config).await?;
     Ok(CryptoServiceClient::new(channel))
 }
 
@@ -176,13 +222,21 @@ async fn main() -> AppResult<()> {
     env_logger::init();
 
     // Parse server address from environment or use default
-    let server_addr = env::var("SERVER_ADDR")
+    let addr_str = env::var("SERVER_ADDR")
         .unwrap_or_else(|_| DEFAULT_SERVER_ADDR.to_string());
+    
+    let transport_config = TransportConfig::from_str(&addr_str)
+        .map_err(|e| {
+            error!("Invalid server address '{}': {}", addr_str, e);
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, e)
+        })?;
 
-    info!("Starting gRPC client");
+    info!("Starting gRPC client, connecting to {} ({})",
+          transport_config,
+          if transport_config.is_tcp() { "TCP" } else { "VSOCK" });
 
     // Connect to echo service
-    let mut echo_client = connect_to_echo_server(&server_addr).await?;
+    let mut echo_client = connect_to_echo_server(&transport_config).await?;
     
     // Run echo tests
     match run_echo_test(&mut echo_client).await {
@@ -196,7 +250,7 @@ async fn main() -> AppResult<()> {
     }
     
     // Connect to crypto service
-    let mut crypto_client = connect_to_crypto_server(&server_addr).await?;
+    let mut crypto_client = connect_to_crypto_server(&transport_config).await?;
     
     // Run crypto tests
     match run_crypto_test(&mut crypto_client).await {

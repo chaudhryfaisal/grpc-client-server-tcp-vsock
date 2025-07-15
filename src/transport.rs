@@ -3,6 +3,9 @@
 use std::fmt;
 use std::net::SocketAddr;
 use std::str::FromStr;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_vsock::{VsockListener, VsockStream};
 
@@ -136,6 +139,46 @@ impl Connection {
                     .map(|addr| format!("vsock://{}:{}", addr.cid(), addr.port()))
                     .map_err(|e| TransportError::Vsock(e.to_string()))
             }
+        }
+    }
+}
+
+impl AsyncRead for Connection {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        match &mut *self {
+            Connection::Tcp(stream) => Pin::new(stream).poll_read(cx, buf),
+            Connection::Vsock(stream) => Pin::new(stream).poll_read(cx, buf),
+        }
+    }
+}
+
+impl AsyncWrite for Connection {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<Result<usize, std::io::Error>> {
+        match &mut *self {
+            Connection::Tcp(stream) => Pin::new(stream).poll_write(cx, buf),
+            Connection::Vsock(stream) => Pin::new(stream).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), std::io::Error>> {
+        match &mut *self {
+            Connection::Tcp(stream) => Pin::new(stream).poll_flush(cx),
+            Connection::Vsock(stream) => Pin::new(stream).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), std::io::Error>> {
+        match &mut *self {
+            Connection::Tcp(stream) => Pin::new(stream).poll_shutdown(cx),
+            Connection::Vsock(stream) => Pin::new(stream).poll_shutdown(cx),
         }
     }
 }
