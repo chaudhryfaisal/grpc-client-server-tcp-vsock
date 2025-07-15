@@ -8,6 +8,7 @@ use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_vsock::{VsockListener, VsockStream};
+use vsock::VMADDR_CID_ANY;
 
 /// Configuration for different transport types.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -276,7 +277,11 @@ impl Transport for VsockTransport {
     async fn bind(config: &TransportConfig) -> Result<Listener, TransportError> {
         match config {
             TransportConfig::Vsock { cid, port } => {
-                let listener = VsockListener::bind(*cid, *port)
+                let cid = match *cid {
+                    0 => VMADDR_CID_ANY,
+                    _ => *cid
+                };
+                let listener = VsockListener::bind(cid, *port)
                     .map_err(|e| TransportError::BindFailed(format!("VSOCK bind to {}:{} failed: {}", cid, port, e)))?;
                 Ok(Listener::Vsock(listener))
             }

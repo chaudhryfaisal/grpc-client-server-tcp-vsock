@@ -1,3 +1,4 @@
+NAME=$(basename $(notdir ${CURDIR}))
 # Makefile for the grpc-performance-rs project
 
 .PHONY: all build test server stop-server client benchmark benchmark-light benchmark-medium benchmark-heavy benchmark-tcp benchmark-vsock benchmark-latency benchmark-throughput clean help setup
@@ -68,7 +69,7 @@ benchmark-tcp: build
 
 benchmark-vsock: build
 	@echo "Running VSOCK transport benchmark..."
-	@$(TARGET_DIR)/benchmark --transport vsock --server 2:1234 --duration 60s --connections 50
+	@$(TARGET_DIR)/benchmark --transport vsock --server ${vsock_addr} --duration 10s --connections 1
 
 benchmark-latency: build
 	@echo "Running latency benchmark..."
@@ -83,29 +84,25 @@ clean:
 	@echo "Cleaning build artifacts..."
 	@cargo clean
 
-# Display help information about available targets
-help:
-	@echo "Usage: make [target]"
-	@echo ""
-	@echo "Build Targets:"
-	@echo "  all       Build all binaries (default)"
-	@echo "  build     Build all binaries in release mode"
-	@echo "  clean     Clean build artifacts"
-	@echo ""
-	@echo "Runtime Targets:"
-	@echo "  server      Start the gRPC server in background"
-	@echo "  stop-server Stop the gRPC server"
-	@echo "  client      Run the sample client"
-	@echo "  test        Run integration tests"
-	@echo ""
-	@echo "Benchmark Targets:"
-	@echo "  benchmark           Execute default performance benchmark"
-	@echo "  benchmark-light     Light load test (10 connections, 30s)"
-	@echo "  benchmark-medium    Medium load test (50 connections, 60s)"
-	@echo "  benchmark-heavy     Heavy load test (100 connections, 120s)"
-	@echo "  benchmark-tcp       TCP transport benchmark"
-	@echo "  benchmark-vsock     VSOCK transport benchmark"
-	@echo "  benchmark-latency   Latency measurement test"
-	@echo "  benchmark-throughput Throughput measurement test"
-	@echo ""
-	@echo "  help      Display this help message"
+# VSOCK
+e_path=target/${NAME}.eif
+e_cid=15
+e_cpu=2
+e_mem=512
+vsock_addr=vsock://${e_cid}:5001
+enclave-image-build:
+	docker build -t ${NAME} -f Dockerfile .
+enclave-image-run: enclave-image-build
+	docker run --rm -it --cap-add=NET_ADMIN ${NAME}
+enclave-build: enclave-image-build
+	nitro-cli build-enclave --docker-uri ${NAME} --output-file ${e_path}
+	ls -lah ${e_path}
+enclave-run: enclave-terminate
+	sudo nitro-cli run-enclave --eif-path ${e_path} --cpu-count ${e_cpu} --memory ${e_mem} \
+			--enclave-cid ${e_cid} --enclave-name ${NAME} --debug-mode --attach-console
+enclave-console:
+	sudo nitro-cli console --enclave-name ${NAME}
+enclave-terminate:
+	sudo nitro-cli terminate-enclave --all || true
+client-enclave:
+	SERVER_ADDR=${vsock_addr} make client

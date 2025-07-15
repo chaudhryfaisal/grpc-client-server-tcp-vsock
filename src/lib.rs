@@ -18,6 +18,8 @@ pub mod crypto {
 
 // Transport abstraction layer
 pub mod transport;
+pub mod transport_channel;
+pub use transport_channel::*;
 
 /// Get current timestamp in milliseconds since Unix epoch
 pub fn current_timestamp_millis() -> i64 {

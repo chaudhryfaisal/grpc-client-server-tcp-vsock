@@ -50,7 +50,7 @@ impl EchoService for EchoServiceImpl {
         );
 
         // Log the request details
-        debug!(
+        info!(
             "Echo request processed: payload='{}', latency={}ms",
             req.payload,
             response_timestamp - req.timestamp

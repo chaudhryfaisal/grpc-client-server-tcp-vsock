@@ -1,0 +1,8 @@
+# Ignore everything
+#**
+
+# But not this specific directory and its contents
+#!target/
+#!target/release/bin/server
+
+target
