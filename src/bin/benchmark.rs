@@ -112,7 +112,6 @@ struct BenchmarkConfig {
     threads: usize,
     requests: usize,
     rate_limit: Option<u64>,
-    transport: String,
     service: String,
     duration: Option<u64>,
     server_addr: String,
@@ -152,18 +151,11 @@ impl BenchmarkConfig {
                     .value_parser(clap::value_parser!(u64)),
             )
             .arg(
-                Arg::new("transport")
-                    .long("transport")
-                    .value_name("TYPE")
-                    .help("Transport type: tcp or vsock")
-                    .value_parser(["tcp", "vsock"]),
-            )
-            .arg(
                 Arg::new("service")
                     .long("service")
                     .value_name("TYPE")
-                    .help("Service type: echo, crypto, or both")
-                    .value_parser(["echo", "crypto", "both"]),
+                    .help("Service type: echo, rsa_sign, ecc_sign, or both")
+                    .value_parser(["echo", "rsa_sign", "ecc_sign", "both"]),
             )
             .arg(
                 Arg::new("duration")
@@ -209,12 +201,6 @@ impl BenchmarkConfig {
             .copied()
             .or_else(|| env::var("RATE_LIMIT").ok().and_then(|s| s.parse().ok()));
 
-        let transport = matches
-            .get_one::<String>("transport")
-            .cloned()
-            .or_else(|| env::var("TRANSPORT").ok())
-            .unwrap_or_else(|| "tcp".to_string());
-
         let service = matches
             .get_one::<String>("service")
             .cloned()
@@ -234,18 +220,9 @@ impl BenchmarkConfig {
             .or_else(|| env::var("SERVER_ADDR").ok())
             .unwrap_or_else(|| DEFAULT_SERVER_ADDR.to_string());
 
-        // Validate argument combinations
-        if !["tcp", "vsock"].contains(&transport.as_str()) {
+        if !["echo", "rsa_sign", "ecc_sign", "both"].contains(&service.as_str()) {
             return Err(format!(
-                "Invalid transport '{}'. Must be 'tcp' or 'vsock'",
-                transport
-            )
-            .into());
-        }
-
-        if !["echo", "crypto", "both"].contains(&service.as_str()) {
-            return Err(format!(
-                "Invalid service '{}'. Must be 'echo', 'crypto', or 'both'",
+                "Invalid service '{}'. Must be 'echo', 'rsa_sign', 'ecc_sign', or 'both'",
                 service
             )
             .into());
@@ -272,7 +249,6 @@ impl BenchmarkConfig {
             threads,
             requests,
             rate_limit,
-            transport,
             service,
             duration,
             server_addr,
@@ -557,7 +533,6 @@ async fn main() -> AppResult<()> {
     if let Some(rate) = config.rate_limit {
         info!("Rate limit: {} requests/second", rate);
     }
-    info!("Transport: {}", config.transport);
     info!("Service: {}", config.service);
 
     // Create channel pool for connection reuse

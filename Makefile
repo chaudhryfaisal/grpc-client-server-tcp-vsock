@@ -52,16 +52,22 @@ client: build
 # Depends on 'build' to ensure the binary is up-to-date
 benchmark: build
 	@echo "Executing default performance benchmark..."
-	@$(TARGET_DIR)/benchmark --duration 30s --connections 10
+	@$(TARGET_DIR)/benchmark --duration 3s --connections 10
+benchmark-rsa-sign: build
+	@echo "Executing default performance benchmark..."
+	@$(TARGET_DIR)/benchmark --duration 3s --connections 10 --service rsa_sign
+benchmark-ecc-sign: build
+	@echo "Executing default performance benchmark..."
+	@$(TARGET_DIR)/benchmark --duration 3s --connections 10 --service ecc_sign
 
 # Additional benchmark targets
 benchmark-light: build
 	@echo "Running light benchmark..."
-	@$(TARGET_DIR)/benchmark --connections 10 --duration 5s --service echo
+	@$(TARGET_DIR)/benchmark --connections 3 --duration 5s --service echo
 
 benchmark-medium: build
 	@echo "Running medium benchmark..."
-	@$(TARGET_DIR)/benchmark --connections 50 --duration 10s --service both
+	@$(TARGET_DIR)/benchmark --connections 15 --duration 10s --service both
 
 benchmark-heavy: build
 	@echo "Running heavy benchmark..."
@@ -69,11 +75,11 @@ benchmark-heavy: build
 
 benchmark-tcp: build
 	@echo "Running TCP transport benchmark..."
-	@$(TARGET_DIR)/benchmark --transport tcp --duration 5s --connections 50
+	@$(TARGET_DIR)/benchmark --duration 5s --connections 50
 
 benchmark-vsock: build
 	@echo "Running VSOCK transport benchmark..."
-	@$(TARGET_DIR)/benchmark --transport vsock --server ${vsock_addr} --duration 10s --connections 1
+	@$(TARGET_DIR)/benchmark --server ${vsock_addr} --duration 10s --connections 1
 
 benchmark-latency: build
 	@echo "Running latency benchmark..."
