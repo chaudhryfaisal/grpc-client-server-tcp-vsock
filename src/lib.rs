@@ -5,6 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use http;
 use ring::signature;
 use ring::signature::{RsaKeyPair, EcdsaKeyPair, KeyPair};
+use rsa::{RsaPrivateKey, pkcs8::EncodePrivateKey};
 
 // Include the generated proto code
 pub mod echo {
@@ -108,15 +109,22 @@ impl CryptoKeys {
     }
     
     /// Create a test RSA key for demonstration
-    /// Note: ring doesn't provide RSA key generation, so this returns None for now
-    /// In production, you'd generate RSA keys with another crate and convert to ring format
+    /// Uses rsa crate for key generation and converts to ring format
     fn create_test_rsa_key() -> Result<RsaKeyPair, String> {
-        // For now, we'll return an error to indicate RSA is not available
-        // In production, you'd either:
-        // 1. Generate RSA keys with another crate (like rsa) and convert to ring format
-        // 2. Load pre-generated keys from secure storage
-        // 3. Use a hardcoded test key for development
-        Err("RSA key generation not implemented".to_string())
+        use rsa::rand_core::OsRng;
+        
+        // Generate RSA private key using rsa crate
+        let mut rng = OsRng;
+        let private_key = RsaPrivateKey::new(&mut rng, 2048)
+            .map_err(|e| format!("Failed to generate RSA key: {}", e))?;
+        
+        // Convert to PKCS#8 DER format for ring
+        let private_key_der = private_key.to_pkcs8_der()
+            .map_err(|e| format!("Failed to encode RSA key: {}", e))?;
+        
+        // Create ring RsaKeyPair from DER bytes
+        RsaKeyPair::from_pkcs8(private_key_der.as_bytes())
+            .map_err(|e| format!("Failed to create ring RSA key pair: {}", e))
     }
     
     /// Get RSA public key in DER format
