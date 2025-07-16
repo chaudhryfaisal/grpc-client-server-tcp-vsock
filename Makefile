@@ -33,7 +33,7 @@ server: build
 		rm -f $(PID_FILE); \
 	fi
 	@echo "Starting gRPC server in background..."
-	@nohup $(TARGET_DIR)/server > server.log 2>&1 & echo $$! > $(PID_FILE)
+	@nohup $(TARGET_DIR)/grpc_server > server.log 2>&1 & echo $$! > $(PID_FILE)
 	@sleep 2 && cat server.log
 	@echo "Server is running in background with PID `cat $(PID_FILE)` (use 'make server-stop' to stop)"
 
@@ -46,48 +46,48 @@ server-stop:
 # Depends on 'build' to ensure the binary is up-to-date
 client: build
 	@echo "Running sample client..."
-	@$(TARGET_DIR)/client
+	@$(TARGET_DIR)/grpc_client
 
 # Execute performance benchmarks
 # Depends on 'build' to ensure the binary is up-to-date
 benchmark: build
 	@echo "Executing default performance benchmark..."
-	@$(TARGET_DIR)/benchmark --duration 3s --connections 10
+	@$(TARGET_DIR)/grpc_benchmark --duration 3s --connections 10
 benchmark-rsa-sign: build
 	@echo "Executing default performance benchmark..."
-	@$(TARGET_DIR)/benchmark --duration 3s --connections 10 --service rsa_sign
+	@$(TARGET_DIR)/grpc_benchmark --duration 3s --connections 10 --service rsa_sign
 benchmark-ecc-sign: build
 	@echo "Executing default performance benchmark..."
-	@$(TARGET_DIR)/benchmark --duration 3s --connections 10 --service ecc_sign
+	@$(TARGET_DIR)/grpc_benchmark --duration 3s --connections 10 --service ecc_sign
 
 # Additional benchmark targets
 benchmark-light: build
 	@echo "Running light benchmark..."
-	@$(TARGET_DIR)/benchmark --connections 3 --duration 5s --service echo
+	@$(TARGET_DIR)/grpc_benchmark --connections 3 --duration 5s --service echo
 
 benchmark-medium: build
 	@echo "Running medium benchmark..."
-	@$(TARGET_DIR)/benchmark --connections 15 --duration 10s --service both
+	@$(TARGET_DIR)/grpc_benchmark --connections 15 --duration 10s --service both
 
 benchmark-heavy: build
 	@echo "Running heavy benchmark..."
-	@$(TARGET_DIR)/benchmark --connections 100 --duration 15s --service both
+	@$(TARGET_DIR)/grpc_benchmark --connections 100 --duration 15s --service both
 
 benchmark-tcp: build
 	@echo "Running TCP transport benchmark..."
-	@$(TARGET_DIR)/benchmark --duration 5s --connections 50
+	@$(TARGET_DIR)/grpc_benchmark --duration 5s --connections 50
 
 benchmark-vsock: build
 	@echo "Running VSOCK transport benchmark..."
-	@$(TARGET_DIR)/benchmark --server ${vsock_addr} --duration 10s --connections 1
+	@$(TARGET_DIR)/grpc_benchmark --server ${vsock_addr} --duration 10s --connections 1
 
 benchmark-latency: build
 	@echo "Running latency benchmark..."
-	@$(TARGET_DIR)/benchmark --connections 1 --requests 1000 --service echo
+	@$(TARGET_DIR)/grpc_benchmark --connections 1 --requests 1000 --service echo
 
 benchmark-throughput: build
 	@echo "Running throughput benchmark..."
-	@$(TARGET_DIR)/benchmark --connections 100 --rate 1000 --duration 60s
+	@$(TARGET_DIR)/grpc_benchmark --connections 100 --rate 1000 --duration 60s
 
 # Clean build artifacts
 clean:

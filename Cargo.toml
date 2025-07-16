@@ -4,15 +4,15 @@ version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "server"
+name = "grpc_server"
 path = "src/bin/server.rs"
 
 [[bin]]
-name = "client"
+name = "grpc_client"
 path = "src/bin/client.rs"
 
 [[bin]]
-name = "benchmark"
+name = "grpc_benchmark"
 path = "src/bin/benchmark.rs"
 
 [[bin]]
@@ -43,6 +43,8 @@ futures-core = "0.3"
 clap = { version = "4.5", features = ["derive"] }
 num_cpus = "1.17"
 sysinfo = "0.36" # for CPU monitor
+deadpool = "0.12" # High-performance async connection pooling
+deadpool-runtime = "0.1" # Runtime support for deadpool
 
 [build-dependencies]
 tonic-build = "0.13"

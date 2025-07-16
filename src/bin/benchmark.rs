@@ -12,10 +12,9 @@ use grpc_performance_rs::{
 use log::{error, info};
 use std::env;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::Semaphore;
 use tokio::time::sleep;
 use tonic::transport::Channel;
 
@@ -276,31 +275,59 @@ fn parse_duration(duration_str: &str) -> Option<u64> {
     }
 }
 
-/// Create a pool of reusable channels for efficient connection management
-async fn create_channel_pool(addr: &str, pool_size: usize) -> AppResult<Vec<Channel>> {
-    let transport_config = TransportConfig::from_str(&addr).map_err(|e| {
-        error!("Invalid server address '{}': {}", addr, e);
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, e)
-    })?;
+/// High-performance round-robin channel pool without semaphore contention
+#[derive(Clone)]
+struct ChannelPool {
+    channels: Arc<Vec<Channel>>,
+    counter: Arc<AtomicUsize>,
+    pool_size: usize,
+}
 
-    info!(
-        "Creating channel pool: {} channels to {} ({})",
-        pool_size,
-        transport_config,
-        if transport_config.is_tcp() {
-            "TCP"
-        } else {
-            "VSOCK"
+impl ChannelPool {
+    /// Create a new high-performance channel pool with exact connection count
+    async fn new(addr: &str, pool_size: usize) -> AppResult<Self> {
+        let transport_config = TransportConfig::from_str(&addr).map_err(|e| {
+            error!("Invalid server address '{}': {}", addr, e);
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, e)
+        })?;
+
+        info!(
+            "Creating optimized channel pool: {} channels to {} ({})",
+            pool_size,
+            transport_config,
+            if transport_config.is_tcp() {
+                "TCP"
+            } else {
+                "VSOCK"
+            }
+        );
+
+        // Pre-create all channels for maximum performance
+        let mut channels = Vec::with_capacity(pool_size);
+        for _ in 0..pool_size {
+            let channel = create_transport_channel(&transport_config).await?;
+            channels.push(channel);
         }
-    );
 
-    let mut channels = Vec::with_capacity(pool_size);
-    for _ in 0..pool_size {
-        let channel = create_transport_channel(&transport_config).await?;
-        channels.push(channel);
+        info!("Channel pool pre-warmed with {} connections", pool_size);
+
+        Ok(ChannelPool {
+            channels: Arc::new(channels),
+            counter: Arc::new(AtomicUsize::new(0)),
+            pool_size,
+        })
     }
 
-    Ok(channels)
+    /// Get a channel from the pool using round-robin (zero contention)
+    fn get(&self) -> Channel {
+        let index = self.counter.fetch_add(1, Ordering::Relaxed) % self.pool_size;
+        self.channels[index].clone()
+    }
+}
+
+/// Create a high-performance channel pool with exact connection count
+async fn create_channel_pool(addr: &str, pool_size: usize) -> AppResult<ChannelPool> {
+    ChannelPool::new(addr, pool_size).await
 }
 
 /// Service type for unified benchmark function
@@ -311,13 +338,16 @@ enum ServiceType {
     EccSign,
 }
 
-/// Execute a single request for the specified service type
-async fn execute_request(
+/// Execute a single request using optimized connection pool
+async fn execute_request_with_pool(
     service_type: ServiceType,
-    channel: Channel,
+    pool: &ChannelPool,
     request_id: u64,
 ) -> Result<u64, ()> {
     let start_time = Instant::now();
+    
+    // Get connection from pool (zero contention round-robin)
+    let channel = pool.get();
 
     let result = match service_type {
         ServiceType::Echo => {
@@ -350,16 +380,17 @@ async fn execute_request(
         }
     };
 
+    // Channel is automatically managed by the pool (no return needed)
     match result {
         Ok(_) => Ok(start_time.elapsed().as_micros() as u64),
         Err(_) => Err(()),
     }
 }
 
-/// Simplified unified benchmark function
-async fn run_benchmark(
+/// Optimized benchmark function using high-performance connection pooling
+async fn run_benchmark_optimized(
     service_type: ServiceType,
-    channels: Arc<Vec<Channel>>,
+    pool: Arc<ChannelPool>,
     concurrent_requests: usize,
     total_requests: usize,
     metrics: BenchmarkMetrics,
@@ -373,11 +404,10 @@ async fn run_benchmark(
     };
 
     info!(
-        "Starting {} service benchmark: {} concurrent connections",
+        "Starting {} service benchmark: {} concurrent workers with optimized pool",
         service_name, concurrent_requests
     );
 
-    let semaphore = Arc::new(Semaphore::new(concurrent_requests));
     let stop_flag = Arc::new(AtomicBool::new(false));
     let request_counter = Arc::new(AtomicU64::new(0));
 
@@ -390,16 +420,15 @@ async fn run_benchmark(
         });
     }
 
-    // Calculate rate limiting interval (only apply if explicitly specified)
-    let rate_interval = rate_limit.map(|rps| Duration::from_nanos(1_000_000_000 / rps));
+    // Calculate rate limiting interval per worker
+    let rate_interval = rate_limit.map(|rps| Duration::from_nanos(1_000_000_000 / rps / concurrent_requests as u64));
 
-    let mut tasks = Vec::new();
+    let mut tasks = Vec::with_capacity(concurrent_requests);
 
-    // For duration-based benchmarks, spawn concurrent workers that run continuously
+    // For duration-based benchmarks, spawn concurrent workers
     if duration.is_some() {
-        // Spawn concurrent workers that continuously make requests
         for _i in 0..concurrent_requests {
-            let channels = channels.clone();
+            let pool = pool.clone();
             let stop_flag = stop_flag.clone();
             let request_counter = request_counter.clone();
             let metrics = metrics.clone();
@@ -411,8 +440,7 @@ async fn run_benchmark(
                 while !stop_flag.load(Ordering::Relaxed) {
                     // Apply rate limiting per worker if specified
                     if let Some(interval) = rate_interval {
-                        let worker_interval = Duration::from_nanos(interval.as_nanos() as u64 * concurrent_requests as u64);
-                        let next_request_time = last_request_time + worker_interval;
+                        let next_request_time = last_request_time + interval;
                         let now = Instant::now();
                         if now < next_request_time {
                             sleep(next_request_time - now).await;
@@ -420,12 +448,11 @@ async fn run_benchmark(
                         last_request_time = Instant::now();
                     }
 
-                    // Get next request ID and select channel
+                    // Get next request ID
                     let request_id = request_counter.fetch_add(1, Ordering::Relaxed);
-                    let channel_index = request_id as usize % channels.len();
-                    let channel = channels[channel_index].clone();
                     
-                    match execute_request(service_type, channel, request_id).await {
+                    // Execute request with pool (no semaphore needed)
+                    match execute_request_with_pool(service_type, &pool, request_id).await {
                         Ok(latency) => metrics.record_success(latency),
                         Err(_) => metrics.record_failure(),
                     }
@@ -435,40 +462,48 @@ async fn run_benchmark(
             tasks.push(task);
         }
     } else {
-        // For count-based benchmarks, use the original approach but without artificial rate limiting
-        let mut last_request_time = Instant::now();
+        // For count-based benchmarks, distribute requests across workers
+        let requests_per_worker = total_requests / concurrent_requests;
+        let remaining_requests = total_requests % concurrent_requests;
 
-        // Main request loop for count-based benchmarks
-        for request_id in 0..total_requests {
-            // Check if we should stop
-            if stop_flag.load(Ordering::Relaxed) {
-                break;
-            }
-
-            // Apply rate limiting only if explicitly specified
-            if let Some(interval) = rate_interval {
-                let next_request_time = last_request_time + interval;
-                let now = Instant::now();
-                if now < next_request_time {
-                    sleep(next_request_time - now).await;
-                }
-                last_request_time = Instant::now();
-            }
-
-            // Select channel
-            let channel_index = request_id % channels.len();
-            let channel = channels[channel_index].clone();
-            
-            // Clone shared resources for the task
-            let semaphore = semaphore.clone();
+        for worker_id in 0..concurrent_requests {
+            let pool = pool.clone();
+            let stop_flag = stop_flag.clone();
             let metrics = metrics.clone();
+            let rate_interval = rate_interval;
+            
+            // Calculate requests for this worker
+            let worker_requests = if worker_id < remaining_requests {
+                requests_per_worker + 1
+            } else {
+                requests_per_worker
+            };
 
             let task = tokio::spawn(async move {
-                let _permit = semaphore.acquire().await.unwrap();
+                let mut last_request_time = Instant::now();
                 
-                match execute_request(service_type, channel, request_id as u64).await {
-                    Ok(latency) => metrics.record_success(latency),
-                    Err(_) => metrics.record_failure(),
+                for local_request_id in 0..worker_requests {
+                    if stop_flag.load(Ordering::Relaxed) {
+                        break;
+                    }
+
+                    // Apply rate limiting if specified
+                    if let Some(interval) = rate_interval {
+                        let next_request_time = last_request_time + interval;
+                        let now = Instant::now();
+                        if now < next_request_time {
+                            sleep(next_request_time - now).await;
+                        }
+                        last_request_time = Instant::now();
+                    }
+
+                    let request_id = (worker_id * requests_per_worker + local_request_id) as u64;
+                    
+                    // Execute request with pool (no semaphore needed)
+                    match execute_request_with_pool(service_type, &pool, request_id).await {
+                        Ok(latency) => metrics.record_success(latency),
+                        Err(_) => metrics.record_failure(),
+                    }
                 }
             });
 
@@ -547,10 +582,12 @@ async fn main() -> AppResult<()> {
     }
     info!("Service: {}", config.service);
 
-    // Create channel pool for connection reuse
-    let channels = Arc::new(
+    // Create optimized connection pool with exact connection count
+    let pool = Arc::new(
         create_channel_pool(&config.server_addr, config.connections).await?
     );
+    
+    info!("Connection pool created with {} connections", config.connections);
 
     // Helper function to get service display name
     fn get_service_display_name(service_type: ServiceType) -> &'static str {
@@ -561,18 +598,18 @@ async fn main() -> AppResult<()> {
         }
     }
 
-    // Helper function to run a single service benchmark
+    // Helper function to run a single service benchmark with optimized pool
     async fn run_single_service_benchmark(
         service_type: ServiceType,
-        channels: Arc<Vec<Channel>>,
+        pool: Arc<ChannelPool>,
         config: &BenchmarkConfig,
     ) -> AppResult<()> {
         let metrics = BenchmarkMetrics::new();
         let start_time = Instant::now();
 
-        run_benchmark(
+        run_benchmark_optimized(
             service_type,
-            channels,
+            pool,
             config.connections,
             config.requests,
             metrics.clone(),
@@ -600,7 +637,7 @@ async fn main() -> AppResult<()> {
     // Run benchmarks for each service
     for service_type in services_to_benchmark {
         println!("\n=== {} Service Benchmark ===", get_service_display_name(service_type));
-        run_single_service_benchmark(service_type, channels.clone(), &config).await?;
+        run_single_service_benchmark(service_type, pool.clone(), &config).await?;
     }
 
     // If benchmarking all services, print comparison summary

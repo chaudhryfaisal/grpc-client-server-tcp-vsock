@@ -18,16 +18,16 @@ pub async fn create_transport_channel(transport_config: &TransportConfig) -> App
                 .map_err(|e| AppError::TransportLayer(TransportError::InvalidAddress(format!("Invalid TCP address: {}", e))))?;
 
             let channel = endpoint
-                .tcp_keepalive(Some(Duration::from_secs(10))) // More frequent keepalives
+                .tcp_keepalive(Some(Duration::from_secs(5))) // More aggressive keepalive
                 .tcp_nodelay(true)
-                .http2_keep_alive_interval(Duration::from_secs(10)) // Faster detection
-                .keep_alive_timeout(Duration::from_secs(5))
+                .http2_keep_alive_interval(Duration::from_secs(5)) // Faster detection
+                .keep_alive_timeout(Duration::from_secs(3)) // Faster timeout
                 .keep_alive_while_idle(true) // Keep connections alive
-                .initial_stream_window_size(Some(16 * 1024 * 1024)) // 16MB for high throughput
-                .initial_connection_window_size(Some(16 * 1024 * 1024)) // 16MB for high throughput
+                .initial_stream_window_size(Some(32 * 1024 * 1024)) // 32MB for higher throughput
+                .initial_connection_window_size(Some(32 * 1024 * 1024)) // 32MB for higher throughput
                 .http2_adaptive_window(true) // Enable adaptive windowing
-                .timeout(Duration::from_secs(30)) // Connection timeout
-                .connect_timeout(Duration::from_secs(10)) // Faster connection establishment
+                .timeout(Duration::from_secs(15)) // Reduced timeout
+                .connect_timeout(Duration::from_secs(5)) // Faster connection establishment
                 .connect()
                 .await
                 .map_err(|e| AppError::TransportLayer(TransportError::ConnectionFailed(format!("Failed to connect via TCP: {}", e))))?;
@@ -57,16 +57,16 @@ pub async fn create_transport_channel(transport_config: &TransportConfig) -> App
 
             let endpoint = Endpoint::from_static("http://[::]:50051");
             let channel = endpoint
-                .tcp_keepalive(Some(Duration::from_secs(10))) // More frequent keepalives
+                .tcp_keepalive(Some(Duration::from_secs(5))) // More aggressive keepalive
                 .tcp_nodelay(true)
-                .http2_keep_alive_interval(Duration::from_secs(10)) // Faster detection
-                .keep_alive_timeout(Duration::from_secs(5))
+                .http2_keep_alive_interval(Duration::from_secs(5)) // Faster detection
+                .keep_alive_timeout(Duration::from_secs(3)) // Faster timeout
                 .keep_alive_while_idle(true) // Keep connections alive
-                .initial_stream_window_size(Some(16 * 1024 * 1024)) // 16MB for high throughput
-                .initial_connection_window_size(Some(16 * 1024 * 1024)) // 16MB for high throughput
+                .initial_stream_window_size(Some(32 * 1024 * 1024)) // 32MB for higher throughput
+                .initial_connection_window_size(Some(32 * 1024 * 1024)) // 32MB for higher throughput
                 .http2_adaptive_window(true) // Enable adaptive windowing
-                .timeout(Duration::from_secs(30)) // Connection timeout
-                .connect_timeout(Duration::from_secs(10)) // Faster connection establishment
+                .timeout(Duration::from_secs(15)) // Reduced timeout
+                .connect_timeout(Duration::from_secs(5)) // Faster connection establishment
                 .connect_with_connector(connector)
                 .await
                 .map_err(|e| AppError::TransportLayer(TransportError::ConnectionFailed(format!("Failed to connect via VSOCK: {}", e))))?;

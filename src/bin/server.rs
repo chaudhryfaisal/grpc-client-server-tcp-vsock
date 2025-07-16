@@ -48,7 +48,7 @@ impl EchoService for EchoServiceImpl {
         );
 
         // Log the request details
-        info!(
+        debug!(
             "Echo request processed: payload='{}', latency={}ms",
             req.payload,
             response_timestamp - req.timestamp
@@ -198,11 +198,14 @@ fn main() -> AppResult<()> {
           if transport_config.is_tcp() { "TCP" } else { "VSOCK" },
           worker_threads);
 
-    // Optimize tokio runtime for better multi-threading performance
+    // Optimize tokio runtime for maximum performance
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(worker_threads)
         .thread_name("grpc-server-worker")
-        .thread_stack_size(3 * 1024 * 1024) // 3MB stack size
+        .thread_stack_size(4 * 1024 * 1024) // 4MB stack (increased)
+        .thread_keep_alive(std::time::Duration::from_secs(60)) // Keep threads alive
+        .global_queue_interval(31) // Optimize work stealing
+        .event_interval(61) // Optimize event polling
         .enable_all()
         .build()
         .map_err(|e| {
@@ -219,17 +222,19 @@ fn main() -> AppResult<()> {
         
         info!("Crypto keys generated successfully");
 
-        // Create and start the gRPC server
+        // Create and start the gRPC server with optimized performance settings
         let server = Server::builder()
-            .tcp_keepalive(Some(std::time::Duration::from_secs(10))) // Match client keepalive
+            .tcp_keepalive(Some(std::time::Duration::from_secs(5))) // Match client keepalive
             .tcp_nodelay(true)
-            .http2_keepalive_interval(Some(std::time::Duration::from_secs(10))) // Match client interval
-            .http2_keepalive_timeout(Some(std::time::Duration::from_secs(5))) // Match client timeout
+            .http2_keepalive_interval(Some(std::time::Duration::from_secs(5))) // Match client interval
+            .http2_keepalive_timeout(Some(std::time::Duration::from_secs(3))) // Match client timeout
             .http2_adaptive_window(Some(true))
-            .max_concurrent_streams(Some(1000))
-            .initial_stream_window_size(Some(1024 * 1024)) // 1MB
-            .initial_connection_window_size(Some(1024 * 1024)) // 1MB
-            .max_frame_size(Some(16384)) // 16KB
+            .max_concurrent_streams(Some(2000)) // Double capacity for higher concurrency
+            .initial_stream_window_size(Some(32 * 1024 * 1024)) // 32MB windows
+            .initial_connection_window_size(Some(32 * 1024 * 1024)) // 32MB windows
+            .max_frame_size(Some(32 * 1024)) // 32KB frames
+            .concurrency_limit_per_connection(256) // Per-connection limit
+            .timeout(std::time::Duration::from_secs(30)) // Request timeout
             .add_service(EchoServiceServer::new(echo_service))
             .add_service(CryptoServiceServer::new(crypto_service));
 

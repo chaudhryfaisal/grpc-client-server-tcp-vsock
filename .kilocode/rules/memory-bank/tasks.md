@@ -136,6 +136,7 @@
 ### Adding New Transport Support
 **Files to modify:**
 - `src/transport.rs` - Add new transport implementation
+- `src/transport_channel.rs` - Add channel abstraction support
 - `src/lib.rs` - Update error types if needed
 - `tests/integration_test.rs` - Add transport-specific tests
 - `examples/transport_demo.rs` - Add demonstration
@@ -154,4 +155,19 @@
 - `src/bin/server.rs` - Server configuration optimizations
 - `src/bin/benchmark.rs` - Benchmarking improvements
 - `src/transport.rs` - Transport layer optimizations
+- `src/transport_channel.rs` - Channel performance tuning
+- `src/bin/cpu_monitor.rs` - Resource monitoring enhancements
 - `Makefile` - Build optimization targets
+
+### Container Deployment
+**Files to modify:**
+- `Dockerfile` - Production container configuration
+- `Makefile` - Docker build and run targets, enclave support
+- `README.md` - Deployment documentation updates
+
+### Cryptographic Enhancement
+**Files to modify:**
+- `src/lib.rs` - CryptoKeys implementation with ring crate
+- `src/bin/server.rs` - Key generation and signing service
+- `tests/integration_test.rs` - Cryptographic operation tests
+- `proto/crypto.proto` - Algorithm and key type definitions
