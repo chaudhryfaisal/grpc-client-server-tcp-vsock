@@ -5,10 +5,13 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::future::Future;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_vsock::{VsockListener, VsockStream};
 use vsock::VMADDR_CID_ANY;
+use futures_core::Stream;
+use tonic::transport::server::Connected;
 
 /// Configuration for different transport types.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -184,6 +187,14 @@ impl AsyncWrite for Connection {
     }
 }
 
+impl Connected for Connection {
+    type ConnectInfo = ();
+
+    fn connect_info(&self) -> Self::ConnectInfo {
+        ()
+    }
+}
+
 /// Unified listener type that can represent either TCP or VSOCK listeners.
 #[derive(Debug)]
 pub enum Listener {
@@ -220,6 +231,31 @@ impl Listener {
                     .map(|addr| format!("vsock://{}:{}", addr.cid(), addr.port()))
                     .map_err(|e| TransportError::Vsock(e.to_string()))
             }
+        }
+    }
+
+    /// Convert this listener into a stream of incoming connections
+    pub fn into_stream(self) -> ListenerStream {
+        ListenerStream { listener: self }
+    }
+}
+
+/// A stream adapter for the Listener that implements Stream trait
+pub struct ListenerStream {
+    listener: Listener,
+}
+
+impl Stream for ListenerStream {
+    type Item = Result<Connection, TransportError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        // Create a future for the accept operation
+        let accept_future = self.listener.accept();
+        tokio::pin!(accept_future);
+        
+        match accept_future.poll(cx) {
+            Poll::Ready(result) => Poll::Ready(Some(result)),
+            Poll::Pending => Poll::Pending,
         }
     }
 }

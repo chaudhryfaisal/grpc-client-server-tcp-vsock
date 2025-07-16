@@ -14,8 +14,6 @@ use log::{info, error, debug};
 use std::env;
 use std::str::FromStr;
 use tonic::{transport::Server, Request, Response, Status};
-use tower::Service;
-use hyper::service::service_fn;
 
 /// Echo service implementation
 #[derive(Debug, Default)]
@@ -217,16 +215,12 @@ fn main() -> AppResult<()> {
         let echo_service = EchoServiceImpl::default();
         
         // Create crypto service
-        let crypto_service = CryptoServiceImpl::new()
-            .map_err(|e| {
-                error!("Failed to initialize crypto service: {}", e);
-                std::io::Error::new(std::io::ErrorKind::Other, e)
-            })?;
+        let crypto_service = CryptoServiceImpl::new()?;
         
         info!("Crypto keys generated successfully");
 
-        // Create the gRPC router with services
-        let router = Server::builder()
+        // Create and start the gRPC server
+        let server = Server::builder()
             .tcp_keepalive(Some(std::time::Duration::from_secs(30)))
             .tcp_nodelay(true)
             .http2_keepalive_interval(Some(std::time::Duration::from_secs(30)))
@@ -236,60 +230,18 @@ fn main() -> AppResult<()> {
             .initial_connection_window_size(Some(1024 * 1024)) // 1MB
             .max_frame_size(Some(16384)) // 16KB
             .add_service(EchoServiceServer::new(echo_service))
-            .add_service(CryptoServiceServer::new(crypto_service))
-            .into_router();
+            .add_service(CryptoServiceServer::new(crypto_service));
 
-        // Bind to the transport
-        let mut listener = TransportFactory::bind(&transport_config).await
-            .map_err(|e| {
-                error!("Failed to bind to {}: {}", transport_config, e);
-                std::io::Error::new(std::io::ErrorKind::AddrInUse, e)
-            })?;
+        // Bind to the transport and serve
+        let listener = TransportFactory::bind(&transport_config).await?;
 
-        let local_addr = listener.local_addr()
-            .map_err(|e| {
-                error!("Failed to get local address: {}", e);
-                std::io::Error::new(std::io::ErrorKind::Other, e)
-            })?;
+        let local_addr = listener.local_addr()?;
 
         info!("gRPC server listening on {}", local_addr);
 
-        // Custom server loop to accept connections
-        loop {
-            match listener.accept().await {
-                Ok(connection) => {
-                    let remote_addr = connection.remote_addr()
-                        .unwrap_or_else(|_| "unknown".to_string());
-                    
-                    debug!("Accepted connection from {}", remote_addr);
-                    
-                    // Clone the router for this connection
-                    let router_clone = router.clone();
-                    
-                    // Spawn a task to handle this connection
-                    tokio::spawn(async move {
-                        // Create a hyper service from the connection
-                        let service = service_fn(move |req| {
-                            router_clone.clone().call(req)
-                        });
-                        
-                        // Serve HTTP/2 over this connection using hyper 0.14 API
-                        if let Err(e) = hyper::server::conn::Http::new()
-                            .http2_only(true)
-                            .serve_connection(connection, service)
-                            .await
-                        {
-                            debug!("Connection from {} closed with error: {}", remote_addr, e);
-                        } else {
-                            debug!("Connection from {} closed gracefully", remote_addr);
-                        }
-                    });
-                }
-                Err(e) => {
-                    error!("Failed to accept connection: {}", e);
-                    // Continue accepting other connections
-                }
-            }
-        }
+        // Use tonic's built-in server with incoming stream
+        server.serve_with_incoming(listener.into_stream()).await?;
+
+        Ok(())
     })
 }

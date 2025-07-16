@@ -2,6 +2,7 @@ use std::time::Duration;
 use http::Uri;
 use log::{debug, info};
 use tonic::transport::{Channel, Endpoint};
+use hyper_util::rt::tokio::TokioIo;
 use crate::{AppError, AppResult};
 use crate::transport::{Connection, TransportConfig, TransportError, TransportFactory};
 
@@ -45,7 +46,7 @@ pub async fn create_transport_channel(transport_config: &TransportConfig) -> App
                         .map_err(|e| std::io::Error::new(std::io::ErrorKind::ConnectionRefused, e.to_string()))?;
 
                     match connection {
-                        Connection::Vsock(stream) => Ok(stream),
+                        Connection::Vsock(stream) => Ok(TokioIo::new(stream)),
                         Connection::Tcp(_) => Err(std::io::Error::new(
                             std::io::ErrorKind::InvalidData,
                             "Expected VSOCK connection but got TCP"

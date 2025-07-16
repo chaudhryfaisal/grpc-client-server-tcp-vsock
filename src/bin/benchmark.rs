@@ -154,8 +154,8 @@ impl BenchmarkConfig {
                 Arg::new("service")
                     .long("service")
                     .value_name("TYPE")
-                    .help("Service type: echo, rsa_sign, ecc_sign, or both")
-                    .value_parser(["echo", "rsa_sign", "ecc_sign", "both"]),
+                    .help("Service type: echo, rsa_sign, ecc_sign, or all")
+                    .value_parser(["echo", "rsa_sign", "ecc_sign", "all"]),
             )
             .arg(
                 Arg::new("duration")
@@ -220,9 +220,9 @@ impl BenchmarkConfig {
             .or_else(|| env::var("SERVER_ADDR").ok())
             .unwrap_or_else(|| DEFAULT_SERVER_ADDR.to_string());
 
-        if !["echo", "rsa_sign", "ecc_sign", "both"].contains(&service.as_str()) {
+        if !["echo", "rsa_sign", "ecc_sign", "all"].contains(&service.as_str()) {
             return Err(format!(
-                "Invalid service '{}'. Must be 'echo', 'rsa_sign', 'ecc_sign', or 'both'",
+                "Invalid service '{}'. Must be 'echo', 'rsa_sign', 'ecc_sign', or 'all'",
                 service
             )
             .into());
@@ -308,6 +308,7 @@ async fn create_channel_pool(addr: &str, pool_size: usize) -> AppResult<Vec<Chan
 enum ServiceType {
     Echo,
     RsaSign,
+    EccSign,
 }
 
 /// Execute a single request for the specified service type
@@ -337,6 +338,16 @@ async fn execute_request(
             };
             client.sign(request).await.map(|_| ())
         }
+        ServiceType::EccSign => {
+            let mut client = CryptoServiceClient::new(channel);
+            let request = SignRequest {
+                data: format!("Benchmark data {}", request_id).into_bytes(),
+                key_type: KeyType::Ecc as i32,
+                algorithm: SigningAlgorithm::EcdsaP256Sha256 as i32,
+                timestamp: current_timestamp_millis(),
+            };
+            client.sign(request).await.map(|_| ())
+        }
     };
 
     match result {
@@ -358,6 +369,7 @@ async fn run_benchmark(
     let service_name = match service_type {
         ServiceType::Echo => "echo",
         ServiceType::RsaSign => "rsa_sign",
+        ServiceType::EccSign => "ecc_sign",
     };
 
     info!(
@@ -540,82 +552,62 @@ async fn main() -> AppResult<()> {
         create_channel_pool(&config.server_addr, config.connections).await?
     );
 
+    // Helper function to get service display name
+    fn get_service_display_name(service_type: ServiceType) -> &'static str {
+        match service_type {
+            ServiceType::Echo => "Echo",
+            ServiceType::RsaSign => "RSA Sign",
+            ServiceType::EccSign => "ECC Sign",
+        }
+    }
+
+    // Helper function to run a single service benchmark
+    async fn run_single_service_benchmark(
+        service_type: ServiceType,
+        channels: Arc<Vec<Channel>>,
+        config: &BenchmarkConfig,
+    ) -> AppResult<()> {
+        let metrics = BenchmarkMetrics::new();
+        let start_time = Instant::now();
+
+        run_benchmark(
+            service_type,
+            channels,
+            config.connections,
+            config.requests,
+            metrics.clone(),
+            config.rate_limit,
+            config.duration,
+        )
+        .await?;
+
+        let duration = start_time.elapsed();
+        print_results(get_service_display_name(service_type), &metrics, duration);
+        Ok(())
+    }
+
     let overall_start = Instant::now();
 
-    match config.service.as_str() {
-        "echo" => {
-            let metrics = BenchmarkMetrics::new();
-            let start_time = Instant::now();
+    // Determine which services to benchmark
+    let services_to_benchmark = match config.service.as_str() {
+        "echo" => vec![ServiceType::Echo],
+        "rsa_sign" => vec![ServiceType::RsaSign],
+        "ecc_sign" => vec![ServiceType::EccSign],
+        "all" => vec![ServiceType::Echo, ServiceType::RsaSign, ServiceType::EccSign],
+        _ => unreachable!(), // Already validated above
+    };
 
-            run_benchmark(
-                ServiceType::Echo,
-                channels,
-                config.connections,
-                config.requests,
-                metrics.clone(),
-                config.rate_limit,
-                config.duration,
-            )
-            .await?;
+    // Run benchmarks for each service
+    for service_type in services_to_benchmark {
+        println!("\n=== {} Service Benchmark ===", get_service_display_name(service_type));
+        run_single_service_benchmark(service_type, channels.clone(), &config).await?;
+    }
 
-            let duration = start_time.elapsed();
-            print_results("Echo", &metrics, duration);
-        }
-        "rsa_sign" => {
-            let metrics = BenchmarkMetrics::new();
-            let start_time = Instant::now();
-
-            run_benchmark(
-                ServiceType::RsaSign,
-                channels,
-                config.connections,
-                config.requests,
-                metrics.clone(),
-                config.rate_limit,
-                config.duration,
-            )
-            .await?;
-
-            let duration = start_time.elapsed();
-            print_results("RsaSign", &metrics, duration);
-        }
-        "both" | _ => {
-            // Benchmark echo service
-            let echo_metrics = BenchmarkMetrics::new();
-            let echo_start = Instant::now();
-
-            run_benchmark(
-                ServiceType::Echo,
-                channels.clone(),
-                config.connections,
-                config.requests,
-                echo_metrics.clone(),
-                config.rate_limit,
-                config.duration,
-            )
-            .await?;
-
-            let echo_duration = echo_start.elapsed();
-            print_results("Echo", &echo_metrics, echo_duration);
-
-            // Benchmark crypto service
-            let crypto_metrics = BenchmarkMetrics::new();
-            let crypto_start = Instant::now();
-
-            run_benchmark(
-                ServiceType::RsaSign,
-                channels,
-                config.connections,
-                config.requests,
-                crypto_metrics.clone(),
-                config.rate_limit,
-                config.duration,
-            )
-            .await?;
-
-            let crypto_duration = crypto_start.elapsed();
-            print_results("RsaSign", &crypto_metrics, crypto_duration);
-        }
+    // If benchmarking all services, print comparison summary
+    if config.service == "all" {
+        println!("\n=== Service Comparison Summary ===");
+        println!("All Echo, RSA Sign, and ECC Sign services completed successfully");
+        println!("See individual results above for detailed metrics");
     }
 
     let total_duration = overall_start.elapsed();
