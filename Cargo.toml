@@ -15,6 +15,10 @@ path = "src/bin/client.rs"
 name = "benchmark"
 path = "src/bin/benchmark.rs"
 
+[[bin]]
+name = "cpu_monitor"
+path = "src/bin/cpu_monitor.rs"
+
 [[example]]
 name = "transport_demo"
 path = "examples/transport_demo.rs"
@@ -24,23 +28,19 @@ tonic = "0.11"
 prost = "0.12"
 tokio = { version = "1.0", features = ["macros", "rt-multi-thread", "time"] }
 log = "0.4"
-env_logger = "0.10"
-thiserror = "1.0"
+env_logger = "0.11.8"
+thiserror = "2.0.12"
 http = "0.2"
 ring = "0.17"
-rand = "0.8"
 rsa = "0.9"
-untrusted = "0.9"
 vsock = "0.4"
 tokio-vsock = "0.4"
 hyper = "0.14"
 tower = "0.4"
-tower-service = "0.3"
 async-trait = "0.1"
 clap = { version = "4.0", features = ["derive"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
 num_cpus = "1.16"
+sysinfo = "0.36.0" # for CPU monitor
 
 [build-dependencies]
 tonic-build = "0.11"

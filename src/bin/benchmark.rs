@@ -307,7 +307,7 @@ async fn create_channel_pool(addr: &str, pool_size: usize) -> AppResult<Vec<Chan
 #[derive(Clone, Copy)]
 enum ServiceType {
     Echo,
-    Crypto,
+    RsaSign,
 }
 
 /// Execute a single request for the specified service type
@@ -327,7 +327,7 @@ async fn execute_request(
             };
             client.echo(request).await.map(|_| ())
         }
-        ServiceType::Crypto => {
+        ServiceType::RsaSign => {
             let mut client = CryptoServiceClient::new(channel);
             let request = SignRequest {
                 data: format!("Benchmark data {}", request_id).into_bytes(),
@@ -357,7 +357,7 @@ async fn run_benchmark(
 ) -> AppResult<()> {
     let service_name = match service_type {
         ServiceType::Echo => "echo",
-        ServiceType::Crypto => "crypto",
+        ServiceType::RsaSign => "rsa_sign",
     };
 
     info!(
@@ -561,12 +561,12 @@ async fn main() -> AppResult<()> {
             let duration = start_time.elapsed();
             print_results("Echo", &metrics, duration);
         }
-        "crypto" => {
+        "rsa_sign" => {
             let metrics = BenchmarkMetrics::new();
             let start_time = Instant::now();
 
             run_benchmark(
-                ServiceType::Crypto,
+                ServiceType::RsaSign,
                 channels,
                 config.connections,
                 config.requests,
@@ -577,7 +577,7 @@ async fn main() -> AppResult<()> {
             .await?;
 
             let duration = start_time.elapsed();
-            print_results("Crypto", &metrics, duration);
+            print_results("RsaSign", &metrics, duration);
         }
         "both" | _ => {
             // Benchmark echo service
@@ -603,7 +603,7 @@ async fn main() -> AppResult<()> {
             let crypto_start = Instant::now();
 
             run_benchmark(
-                ServiceType::Crypto,
+                ServiceType::RsaSign,
                 channels,
                 config.connections,
                 config.requests,
@@ -614,7 +614,7 @@ async fn main() -> AppResult<()> {
             .await?;
 
             let crypto_duration = crypto_start.elapsed();
-            print_results("Crypto", &crypto_metrics, crypto_duration);
+            print_results("RsaSign", &crypto_metrics, crypto_duration);
         }
     }
 
