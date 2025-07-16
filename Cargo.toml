@@ -35,7 +35,6 @@ ring = "0.17"
 rsa = "0.9"
 vsock = "0.5"
 tokio-vsock = "0.7"
-hyper = { version = "1.6", features = ["full", "server"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 tower = "0.5"
 async-trait = "0.1"
@@ -50,4 +49,4 @@ deadpool-runtime = "0.1" # Runtime support for deadpool
 tonic-build = "0.13"
 
 [dev-dependencies]
-tokio-test = "0.4"
+#tokio-test = "0.4"
