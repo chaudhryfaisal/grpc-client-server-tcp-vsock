@@ -436,7 +436,8 @@ async fn test_grpc_service_integration_placeholder() -> Result<(), Box<dyn std::
         let port = vsock_port;
         tokio::spawn(async move {
             // Check if VSOCK is available
-            let listener_result = tokio_vsock::VsockListener::bind(cid, port);
+            let addr = tokio_vsock::VsockAddr::new(cid, port);
+            let listener_result = tokio_vsock::VsockListener::bind(addr);
             
             if listener_result.is_err() {
                 println!("⚠ VSOCK not available, skipping VSOCK server");
@@ -533,7 +534,8 @@ async fn test_grpc_service_integration_placeholder() -> Result<(), Box<dyn std::
     println!("6. Testing VSOCK transport availability...");
     
     // Check if VSOCK is available by trying to create a listener
-    let vsock_available = tokio_vsock::VsockListener::bind(vsock_cid, vsock_port + 1).is_ok();
+    let addr = tokio_vsock::VsockAddr::new(vsock_cid, vsock_port + 1);
+    let vsock_available = tokio_vsock::VsockListener::bind(addr).is_ok();
     
     if vsock_available {
         println!("7. VSOCK available - testing VSOCK services...");

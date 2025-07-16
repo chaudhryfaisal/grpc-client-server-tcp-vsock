@@ -8,7 +8,7 @@ use std::task::{Context, Poll};
 use std::future::Future;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
-use tokio_vsock::{VsockListener, VsockStream};
+use tokio_vsock::{VsockListener, VsockStream, VsockAddr};
 use vsock::VMADDR_CID_ANY;
 use futures_core::Stream;
 use tonic::transport::server::Connected;
@@ -317,7 +317,8 @@ impl Transport for VsockTransport {
                     0 => VMADDR_CID_ANY,
                     _ => *cid
                 };
-                let listener = VsockListener::bind(cid, *port)
+                let addr = VsockAddr::new(cid, *port);
+                let listener = VsockListener::bind(addr)
                     .map_err(|e| TransportError::BindFailed(format!("VSOCK bind to {}:{} failed: {}", cid, port, e)))?;
                 Ok(Listener::Vsock(listener))
             }
@@ -328,7 +329,8 @@ impl Transport for VsockTransport {
     async fn connect(config: &TransportConfig) -> Result<Connection, TransportError> {
         match config {
             TransportConfig::Vsock { cid, port } => {
-                let stream = VsockStream::connect(*cid, *port).await
+                let addr = VsockAddr::new(*cid, *port);
+                let stream = VsockStream::connect(addr).await
                     .map_err(|e| TransportError::ConnectionFailed(format!("VSOCK connect to {}:{} failed: {}", cid, port, e)))?;
                 Ok(Connection::Vsock(stream))
             }

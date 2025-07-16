@@ -221,9 +221,10 @@ fn main() -> AppResult<()> {
 
         // Create and start the gRPC server
         let server = Server::builder()
-            .tcp_keepalive(Some(std::time::Duration::from_secs(30)))
+            .tcp_keepalive(Some(std::time::Duration::from_secs(10))) // Match client keepalive
             .tcp_nodelay(true)
-            .http2_keepalive_interval(Some(std::time::Duration::from_secs(30)))
+            .http2_keepalive_interval(Some(std::time::Duration::from_secs(10))) // Match client interval
+            .http2_keepalive_timeout(Some(std::time::Duration::from_secs(5))) // Match client timeout
             .http2_adaptive_window(Some(true))
             .max_concurrent_streams(Some(1000))
             .initial_stream_window_size(Some(1024 * 1024)) // 1MB
@@ -232,15 +233,24 @@ fn main() -> AppResult<()> {
             .add_service(EchoServiceServer::new(echo_service))
             .add_service(CryptoServiceServer::new(crypto_service));
 
-        // Bind to the transport and serve
-        let listener = TransportFactory::bind(&transport_config).await?;
+        // For debugging: Use tonic's built-in TCP transport directly
+        match &transport_config {
+            grpc_performance_rs::transport::TransportConfig::Tcp(addr) => {
+                info!("gRPC server listening on {}", addr);
+                server.serve(*addr).await?;
+            }
+            _ => {
+                // Bind to the transport and serve
+                let listener = TransportFactory::bind(&transport_config).await?;
 
-        let local_addr = listener.local_addr()?;
+                let local_addr = listener.local_addr()?;
 
-        info!("gRPC server listening on {}", local_addr);
+                info!("gRPC server listening on {}", local_addr);
 
-        // Use tonic's built-in server with incoming stream
-        server.serve_with_incoming(listener.into_stream()).await?;
+                // Use tonic's built-in server with incoming stream
+                server.serve_with_incoming(listener.into_stream()).await?;
+            }
+        }
 
         Ok(())
     })
