@@ -387,7 +387,52 @@ async fn execute_request_with_pool(
     }
 }
 
-/// Optimized benchmark function using high-performance connection pooling
+/// Execute a single request using a shared channel (HTTP/2 multiplexing)
+async fn execute_request_with_shared_channel(
+    service_type: ServiceType,
+    channel: &Channel,
+    request_id: u64,
+) -> Result<u64, ()> {
+    let start_time = Instant::now();
+
+    let result = match service_type {
+        ServiceType::Echo => {
+            let mut client = EchoServiceClient::new(channel.clone());
+            let request = EchoRequest {
+                payload: format!("Benchmark request {}", request_id),
+                timestamp: current_timestamp_millis(),
+            };
+            client.echo(request).await.map(|_| ())
+        }
+        ServiceType::RsaSign => {
+            let mut client = CryptoServiceClient::new(channel.clone());
+            let request = SignRequest {
+                data: format!("Benchmark data {}", request_id).into_bytes(),
+                key_type: KeyType::Rsa as i32,
+                algorithm: SigningAlgorithm::RsaPkcs1Sha256 as i32,
+                timestamp: current_timestamp_millis(),
+            };
+            client.sign(request).await.map(|_| ())
+        }
+        ServiceType::EccSign => {
+            let mut client = CryptoServiceClient::new(channel.clone());
+            let request = SignRequest {
+                data: format!("Benchmark data {}", request_id).into_bytes(),
+                key_type: KeyType::Ecc as i32,
+                algorithm: SigningAlgorithm::EcdsaP256Sha256 as i32,
+                timestamp: current_timestamp_millis(),
+            };
+            client.sign(request).await.map(|_| ())
+        }
+    };
+
+    match result {
+        Ok(_) => Ok(start_time.elapsed().as_micros() as u64),
+        Err(_) => Err(()),
+    }
+}
+
+/// Optimized benchmark function using high-performance connection pooling or single channel
 async fn run_benchmark_optimized(
     service_type: ServiceType,
     pool: Arc<ChannelPool>,
@@ -403,10 +448,20 @@ async fn run_benchmark_optimized(
         ServiceType::EccSign => "ecc_sign",
     };
 
-    info!(
-        "Starting {} service benchmark: {} concurrent workers with optimized pool",
-        service_name, concurrent_requests
-    );
+    // Check if we should use single channel optimization (connections = 1)
+    let use_single_channel = pool.pool_size == 1;
+    
+    if use_single_channel {
+        info!(
+            "Starting {} service benchmark: {} concurrent workers with single shared channel (HTTP/2 multiplexing)",
+            service_name, concurrent_requests
+        );
+    } else {
+        info!(
+            "Starting {} service benchmark: {} concurrent workers with {} connection pool",
+            service_name, concurrent_requests, pool.pool_size
+        );
+    }
 
     let stop_flag = Arc::new(AtomicBool::new(false));
     let request_counter = Arc::new(AtomicU64::new(0));
@@ -425,10 +480,18 @@ async fn run_benchmark_optimized(
 
     let mut tasks = Vec::with_capacity(concurrent_requests);
 
+    // Get shared channel for single connection optimization
+    let shared_channel = if use_single_channel {
+        Some(pool.channels[0].clone())
+    } else {
+        None
+    };
+
     // For duration-based benchmarks, spawn concurrent workers
     if duration.is_some() {
         for _i in 0..concurrent_requests {
             let pool = pool.clone();
+            let shared_channel = shared_channel.clone();
             let stop_flag = stop_flag.clone();
             let request_counter = request_counter.clone();
             let metrics = metrics.clone();
@@ -451,8 +514,16 @@ async fn run_benchmark_optimized(
                     // Get next request ID
                     let request_id = request_counter.fetch_add(1, Ordering::Relaxed);
                     
-                    // Execute request with pool (no semaphore needed)
-                    match execute_request_with_pool(service_type, &pool, request_id).await {
+                    // Execute request with appropriate method
+                    let result = if let Some(ref channel) = shared_channel {
+                        // Use shared channel (no mutex contention)
+                        execute_request_with_shared_channel(service_type, channel, request_id).await
+                    } else {
+                        // Use connection pool
+                        execute_request_with_pool(service_type, &pool, request_id).await
+                    };
+                    
+                    match result {
                         Ok(latency) => metrics.record_success(latency),
                         Err(_) => metrics.record_failure(),
                     }
@@ -468,6 +539,7 @@ async fn run_benchmark_optimized(
 
         for worker_id in 0..concurrent_requests {
             let pool = pool.clone();
+            let shared_channel = shared_channel.clone();
             let stop_flag = stop_flag.clone();
             let metrics = metrics.clone();
             let rate_interval = rate_interval;
@@ -499,8 +571,16 @@ async fn run_benchmark_optimized(
 
                     let request_id = (worker_id * requests_per_worker + local_request_id) as u64;
                     
-                    // Execute request with pool (no semaphore needed)
-                    match execute_request_with_pool(service_type, &pool, request_id).await {
+                    // Execute request with appropriate method
+                    let result = if let Some(ref channel) = shared_channel {
+                        // Use shared channel (no mutex contention)
+                        execute_request_with_shared_channel(service_type, channel, request_id).await
+                    } else {
+                        // Use connection pool
+                        execute_request_with_pool(service_type, &pool, request_id).await
+                    };
+                    
+                    match result {
                         Ok(latency) => metrics.record_success(latency),
                         Err(_) => metrics.record_failure(),
                     }
