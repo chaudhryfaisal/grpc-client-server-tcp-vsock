@@ -10,13 +10,59 @@ use grpc_performance_rs::{
     AppResult, DEFAULT_SERVER_ADDR,
 };
 use log::{error, info};
+use serde::{Deserialize, Serialize};
 use std::env;
+use std::fs::File;
+use std::io::Write;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::time::sleep;
 use tonic::transport::Channel;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RequestResult {
+    request_id: u64,
+    service_type: String,
+    timestamp_millis: u64,
+    latency_micros: u64,
+    success: bool,
+    error_message: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct BenchmarkResults {
+    config: BenchmarkResultsConfig,
+    start_time: u64,
+    end_time: u64,
+    duration_millis: u64,
+    summary: BenchmarkSummary,
+    requests: Vec<RequestResult>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct BenchmarkResultsConfig {
+    connections: usize,
+    threads: usize,
+    requests: usize,
+    rate_limit: Option<u64>,
+    service: String,
+    duration: Option<u64>,
+    server_addr: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct BenchmarkSummary {
+    total_requests: u64,
+    successful_requests: u64,
+    failed_requests: u64,
+    success_rate_percent: f64,
+    requests_per_second: f64,
+    avg_latency_micros: f64,
+    min_latency_micros: u64,
+    max_latency_micros: u64,
+}
 
 #[derive(Clone)]
 struct BenchmarkMetrics {
@@ -26,10 +72,11 @@ struct BenchmarkMetrics {
     total_latency_micros: Arc<AtomicU64>,
     min_latency_micros: Arc<AtomicU64>,
     max_latency_micros: Arc<AtomicU64>,
+    detailed_results: Option<Arc<Mutex<Vec<RequestResult>>>>,
 }
 
 impl BenchmarkMetrics {
-    fn new() -> Self {
+    fn new(collect_detailed_results: bool) -> Self {
         Self {
             total_requests: Arc::new(AtomicU64::new(0)),
             successful_requests: Arc::new(AtomicU64::new(0)),
@@ -37,10 +84,15 @@ impl BenchmarkMetrics {
             total_latency_micros: Arc::new(AtomicU64::new(0)),
             min_latency_micros: Arc::new(AtomicU64::new(u64::MAX)),
             max_latency_micros: Arc::new(AtomicU64::new(0)),
+            detailed_results: if collect_detailed_results {
+                Some(Arc::new(Mutex::new(Vec::new())))
+            } else {
+                None
+            },
         }
     }
 
-    fn record_success(&self, latency_micros: u64) {
+    fn record_success(&self, request_id: u64, service_type: &str, latency_micros: u64) {
         self.total_requests.fetch_add(1, Ordering::Relaxed);
         self.successful_requests.fetch_add(1, Ordering::Relaxed);
         self.total_latency_micros
@@ -73,11 +125,53 @@ impl BenchmarkMetrics {
                 Err(x) => current_max = x,
             }
         }
+
+        // Record detailed result if enabled
+        if let Some(ref detailed_results) = self.detailed_results {
+            let timestamp_millis = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            
+            let result = RequestResult {
+                request_id,
+                service_type: service_type.to_string(),
+                timestamp_millis,
+                latency_micros,
+                success: true,
+                error_message: None,
+            };
+            
+            if let Ok(mut results) = detailed_results.lock() {
+                results.push(result);
+            }
+        }
     }
 
-    fn record_failure(&self) {
+    fn record_failure(&self, request_id: u64, service_type: &str, error_message: Option<String>) {
         self.total_requests.fetch_add(1, Ordering::Relaxed);
         self.failed_requests.fetch_add(1, Ordering::Relaxed);
+
+        // Record detailed result if enabled
+        if let Some(ref detailed_results) = self.detailed_results {
+            let timestamp_millis = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            
+            let result = RequestResult {
+                request_id,
+                service_type: service_type.to_string(),
+                timestamp_millis,
+                latency_micros: 0,
+                success: false,
+                error_message,
+            };
+            
+            if let Ok(mut results) = detailed_results.lock() {
+                results.push(result);
+            }
+        }
     }
 
     fn get_stats(&self) -> (u64, u64, u64, f64, u64, u64) {
@@ -114,6 +208,7 @@ struct BenchmarkConfig {
     service: String,
     duration: Option<u64>,
     server_addr: String,
+    output_file: Option<String>,
 }
 
 impl BenchmarkConfig {
@@ -168,6 +263,13 @@ impl BenchmarkConfig {
                     .value_name("ADDR")
                     .help("Server address (overrides SERVER_ADDR env var)"),
             )
+            .arg(
+                Arg::new("output")
+                    .long("output")
+                    .short('o')
+                    .value_name("FILE")
+                    .help("Save detailed results to JSON file (includes every request with timestamp and latency)"),
+            )
             .get_matches();
 
         // CLI arguments take precedence over environment variables
@@ -219,6 +321,11 @@ impl BenchmarkConfig {
             .or_else(|| env::var("SERVER_ADDR").ok())
             .unwrap_or_else(|| DEFAULT_SERVER_ADDR.to_string());
 
+        let output_file = matches
+            .get_one::<String>("output")
+            .cloned()
+            .or_else(|| env::var("BENCHMARK_OUTPUT").ok());
+
         if !["echo", "rsa_sign", "ecc_sign", "all"].contains(&service.as_str()) {
             return Err(format!(
                 "Invalid service '{}'. Must be 'echo', 'rsa_sign', 'ecc_sign', or 'all'",
@@ -251,6 +358,7 @@ impl BenchmarkConfig {
             service,
             duration,
             server_addr,
+            output_file,
         })
     }
 }
@@ -343,7 +451,7 @@ async fn execute_request_with_pool(
     service_type: ServiceType,
     pool: &ChannelPool,
     request_id: u64,
-) -> Result<u64, ()> {
+) -> Result<u64, String> {
     let start_time = Instant::now();
     
     // Get connection from pool (zero contention round-robin)
@@ -383,7 +491,7 @@ async fn execute_request_with_pool(
     // Channel is automatically managed by the pool (no return needed)
     match result {
         Ok(_) => Ok(start_time.elapsed().as_micros() as u64),
-        Err(_) => Err(()),
+        Err(e) => Err(e.to_string()),
     }
 }
 
@@ -392,7 +500,7 @@ async fn execute_request_with_shared_channel(
     service_type: ServiceType,
     channel: &Channel,
     request_id: u64,
-) -> Result<u64, ()> {
+) -> Result<u64, String> {
     let start_time = Instant::now();
 
     let result = match service_type {
@@ -428,7 +536,7 @@ async fn execute_request_with_shared_channel(
 
     match result {
         Ok(_) => Ok(start_time.elapsed().as_micros() as u64),
-        Err(_) => Err(()),
+        Err(e) => Err(e.to_string()),
     }
 }
 
@@ -524,8 +632,8 @@ async fn run_benchmark_optimized(
                     };
                     
                     match result {
-                        Ok(latency) => metrics.record_success(latency),
-                        Err(_) => metrics.record_failure(),
+                        Ok(latency) => metrics.record_success(request_id, service_name, latency),
+                        Err(error_msg) => metrics.record_failure(request_id, service_name, Some(error_msg)),
                     }
                 }
             });
@@ -581,8 +689,8 @@ async fn run_benchmark_optimized(
                     };
                     
                     match result {
-                        Ok(latency) => metrics.record_success(latency),
-                        Err(_) => metrics.record_failure(),
+                        Ok(latency) => metrics.record_success(request_id, service_name, latency),
+                        Err(error_msg) => metrics.record_failure(request_id, service_name, Some(error_msg)),
                     }
                 }
             });
@@ -631,6 +739,92 @@ fn print_results(service_name: &str, metrics: &BenchmarkMetrics, duration: Durat
     info!("Max latency: {} μs", max_latency);
 }
 
+/// Save detailed benchmark results to JSON file
+fn save_results_to_file(
+    config: &BenchmarkConfig,
+    metrics: &BenchmarkMetrics,
+    start_time: SystemTime,
+    end_time: SystemTime,
+    output_file: &str,
+) -> AppResult<()> {
+    let (total, successful, failed, avg_latency, min_latency, max_latency) = metrics.get_stats();
+    
+    let start_timestamp = start_time
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    
+    let end_timestamp = end_time
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    
+    let duration_millis = end_timestamp - start_timestamp;
+    
+    let success_rate = if total > 0 {
+        (successful as f64 / total as f64) * 100.0
+    } else {
+        0.0
+    };
+    
+    let requests_per_second = if duration_millis > 0 {
+        successful as f64 / (duration_millis as f64 / 1000.0)
+    } else {
+        0.0
+    };
+
+    let requests = if let Some(ref detailed_results) = metrics.detailed_results {
+        detailed_results.lock().unwrap().clone()
+    } else {
+        Vec::new()
+    };
+
+    let request_count = requests.len();
+
+    let results = BenchmarkResults {
+        config: BenchmarkResultsConfig {
+            connections: config.connections,
+            threads: config.threads,
+            requests: config.requests,
+            rate_limit: config.rate_limit,
+            service: config.service.clone(),
+            duration: config.duration,
+            server_addr: config.server_addr.clone(),
+        },
+        start_time: start_timestamp,
+        end_time: end_timestamp,
+        duration_millis,
+        summary: BenchmarkSummary {
+            total_requests: total,
+            successful_requests: successful,
+            failed_requests: failed,
+            success_rate_percent: success_rate,
+            requests_per_second,
+            avg_latency_micros: avg_latency,
+            min_latency_micros: if min_latency == u64::MAX { 0 } else { min_latency },
+            max_latency_micros: max_latency,
+        },
+        requests,
+    };
+
+    let json_data = serde_json::to_string_pretty(&results).map_err(|e| {
+        std::io::Error::new(std::io::ErrorKind::Other, format!("JSON serialization failed: {}", e))
+    })?;
+
+    let mut file = File::create(output_file).map_err(|e| {
+        std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to create output file '{}': {}", output_file, e))
+    })?;
+
+    file.write_all(json_data.as_bytes()).map_err(|e| {
+        std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to write to output file '{}': {}", output_file, e))
+    })?;
+
+    info!("Benchmark results saved to: {}", output_file);
+    info!("Total requests recorded: {}", request_count);
+    
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> AppResult<()> {
     // Initialize logging
@@ -661,6 +855,10 @@ async fn main() -> AppResult<()> {
         info!("Rate limit: {} requests/second", rate);
     }
     info!("Service: {}", config.service);
+    
+    if let Some(ref output_file) = config.output_file {
+        info!("Output file: {} (detailed results will be saved)", output_file);
+    }
 
     // Create optimized connection pool with exact connection count
     let pool = Arc::new(
@@ -683,9 +881,11 @@ async fn main() -> AppResult<()> {
         service_type: ServiceType,
         pool: Arc<ChannelPool>,
         config: &BenchmarkConfig,
-    ) -> AppResult<()> {
-        let metrics = BenchmarkMetrics::new();
-        let start_time = Instant::now();
+    ) -> AppResult<(BenchmarkMetrics, Duration, SystemTime, SystemTime)> {
+        let collect_detailed = config.output_file.is_some();
+        let metrics = BenchmarkMetrics::new(collect_detailed);
+        let start_time = SystemTime::now();
+        let start_instant = Instant::now();
 
         run_benchmark_optimized(
             service_type,
@@ -698,9 +898,11 @@ async fn main() -> AppResult<()> {
         )
         .await?;
 
-        let duration = start_time.elapsed();
+        let end_time = SystemTime::now();
+        let duration = start_instant.elapsed();
         print_results(get_service_display_name(service_type), &metrics, duration);
-        Ok(())
+        
+        Ok((metrics, duration, start_time, end_time))
     }
 
     let overall_start = Instant::now();
@@ -714,10 +916,18 @@ async fn main() -> AppResult<()> {
         _ => unreachable!(), // Already validated above
     };
 
-    // Run benchmarks for each service
+    // Run benchmarks for each service and collect results for JSON output
+    let mut all_metrics = Vec::new();
+    let mut all_start_times = Vec::new();
+    let mut all_end_times = Vec::new();
+
     for service_type in services_to_benchmark {
         println!("\n=== {} Service Benchmark ===", get_service_display_name(service_type));
-        run_single_service_benchmark(service_type, pool.clone(), &config).await?;
+        let (metrics, _duration, start_time, end_time) = run_single_service_benchmark(service_type, pool.clone(), &config).await?;
+        
+        all_metrics.push(metrics);
+        all_start_times.push(start_time);
+        all_end_times.push(end_time);
     }
 
     // If benchmarking all services, print comparison summary
@@ -729,6 +939,74 @@ async fn main() -> AppResult<()> {
 
     let total_duration = overall_start.elapsed();
     info!("\nTotal benchmark duration: {:?}", total_duration);
+
+    // Save results to JSON file if specified
+    if let Some(ref output_file) = config.output_file {
+        // Combine all metrics for multi-service benchmarks
+        if all_metrics.len() == 1 {
+            // Single service benchmark
+            save_results_to_file(
+                &config,
+                &all_metrics[0],
+                all_start_times[0],
+                all_end_times[0],
+                output_file,
+            )?;
+        } else {
+            // Multi-service benchmark - combine all detailed results
+            let collect_detailed = true;
+            let combined_metrics = BenchmarkMetrics::new(collect_detailed);
+            
+            // Combine all detailed results and aggregate statistics
+            let mut total_requests = 0u64;
+            let mut successful_requests = 0u64;
+            let mut failed_requests = 0u64;
+            let mut total_latency = 0u64;
+            let mut min_latency = u64::MAX;
+            let mut max_latency = 0u64;
+            
+            if let Some(ref combined_detailed) = combined_metrics.detailed_results {
+                let mut combined_results = combined_detailed.lock().unwrap();
+                
+                for metrics in &all_metrics {
+                    // Aggregate statistics
+                    let (total, successful, failed, _avg, min_lat, max_lat) = metrics.get_stats();
+                    total_requests += total;
+                    successful_requests += successful;
+                    failed_requests += failed;
+                    total_latency += metrics.total_latency_micros.load(Ordering::Relaxed);
+                    min_latency = min_latency.min(if min_lat == u64::MAX { 0 } else { min_lat });
+                    max_latency = max_latency.max(max_lat);
+                    
+                    // Combine detailed results
+                    if let Some(ref detailed) = metrics.detailed_results {
+                        let results = detailed.lock().unwrap();
+                        combined_results.extend(results.clone());
+                    }
+                }
+            }
+            
+            // Update combined metrics with aggregated values
+            combined_metrics.total_requests.store(total_requests, Ordering::Relaxed);
+            combined_metrics.successful_requests.store(successful_requests, Ordering::Relaxed);
+            combined_metrics.failed_requests.store(failed_requests, Ordering::Relaxed);
+            combined_metrics.total_latency_micros.store(total_latency, Ordering::Relaxed);
+            combined_metrics.min_latency_micros.store(min_latency, Ordering::Relaxed);
+            combined_metrics.max_latency_micros.store(max_latency, Ordering::Relaxed);
+            
+            // Use overall timing
+            let overall_start_time = all_start_times.iter().min().copied().unwrap_or(SystemTime::now());
+            let overall_end_time = all_end_times.iter().max().copied().unwrap_or(SystemTime::now());
+            
+            save_results_to_file(
+                &config,
+                &combined_metrics,
+                overall_start_time,
+                overall_end_time,
+                output_file,
+            )?;
+        }
+    }
 
     Ok(())
 }
