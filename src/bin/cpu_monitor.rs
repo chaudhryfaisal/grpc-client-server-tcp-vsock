@@ -58,8 +58,8 @@ fn main() {
             let p99 = percentile(&sorted, 0.99);
 
             info!(
-                "min={:.2}% max={:.2}% avg={:.2}% p95={:.2}% p99={:.2}%",
-                min, max, avg, p95, p99
+                "max={:.2}% min={:.2}% avg={:.2}% p95={:.2}% p99={:.2}%",
+                max, min, avg, p95, p99
             );
         }
 
